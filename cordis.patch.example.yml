@@ -1,0 +1,16 @@
+# Profile 挂载示例：把本插件加入 dsh web 的 browser roster
+# 放置位置二选一：
+#   A. 自定义 profile 目录下的 cordis.patch.yml（推荐，随 profile 走）
+#   B. $DSH_HOME/cordis.patch.yml（对所有 profile 生效，web 层之外慎用）
+#
+# 机制依据：dsh-web-app/cordis.patch.yml 的 "browser plugin roster" 段；
+# dsh.client 行由 dsh-client-modules 的 node 半扫描，browser 半经
+# /plugins/<id>/client.js 服务。
+
+- id: sidebar-visibility
+  name: '@local/dsh-plugin-sidebar-visibility'
+
+# 若实测发现 sidebar.workspaces 席位与官方 ui-workspace 并存冲突，
+# 在同一 patch 里禁用官方行（按实际 patch 语法调整）：
+# - id: ui-workspace
+#   enabled: false

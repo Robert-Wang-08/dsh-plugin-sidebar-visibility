@@ -1,0 +1,5 @@
+# Bundle patch layer: 将本包主入口挂为 host 半（占位 Cordis 插件）；
+# package.json 的 dsh.client 声明让 web app 加载 ./client 作为 browser 半。
+- insert:
+    - id: sidebar-visibility
+      name: '@local/dsh-plugin-sidebar-visibility'
