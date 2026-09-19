@@ -4,7 +4,7 @@ node_modules/
 # Build output — regenerate with `pnpm run bundle`
 lib/
 
-# Local safety backup of a superseded state. Delete once no longer needed.
+# Local safety backups
 .bak-*/
 
 # Packing and build caches

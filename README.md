@@ -1,13 +1,3 @@
----
-title: dsh-plugin-sidebar-visibility 说明
-date created: 2026-09-18
-date modified: 2026-09-18
-tags:
-  - dsh
-  - plugin
-  - 70-WorkSpace
----
-
 # dsh-plugin-sidebar-visibility 说明
 
 DSH Web GUI（`dsh web`，默认 `http://127.0.0.1:3080`）增强插件，五项功能共用一个包：
