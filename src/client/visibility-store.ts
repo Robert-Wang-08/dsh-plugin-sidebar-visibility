@@ -25,7 +25,11 @@ export interface VisibilityPrefs {
   collapsedWorkspaceIds: string[]
   /** 收藏的高价值会话，按收藏时间升序。 */
   favoriteSessionIds: string[]
-  /** Provider 挂起暂存：settingsNs → 被 unset 的用户层子树 / 覆盖前快照。 */
+  /**
+   * Provider 挂起暂存。键是 Provider 级键：命名空间 + settingsPath 派生
+   * （根级 Provider 用命名空间本身）。同一个命名空间下可挂多个 Provider，
+   * 按 Provider 分开暂存才不会互相覆盖。
+   */
   providerStash: Record<string, ProviderStashEntry>
   /** 会话列表分组模式；默认与官方一致。 */
   groupBy: SessionGroupBy

@@ -9,7 +9,7 @@ DSH Web GUI（`dsh web`，默认 `http://127.0.0.1:3080`）增强插件，六项
 | 新建会话 | 工作区行尾「+」按钮 | 在该工作区进入新建会话流程；分组处于折叠态时先自动展开 |
 | 会话行动作 | 会话行悬停后，标题行**下方**出现竖排的「重命名 / 分叉 / 归档」 | 重命名就地输入（Enter 提交、Escape 取消）；分叉从最后一个完整回合切出子会话；归档后可在「设置 → 已归档会话」恢复 |
 | 会话收藏 + 仅收藏筛选 | 会话行标题行右端 ☆/★（常显）+ 树顶「仅收藏」开关 | 收藏纯前端派生视图，不写 Host 数据；已归档与 subagent 会话不显示也不可收藏 |
-| Provider 挂起/恢复 | 设置 → 模型 → Provider 卡片上的开关 | 配置暂存进本插件存储并 unset（或写 `models: []` 覆盖），该 Provider 的模型从所有选择器消失；恢复时写回 |
+| Provider 挂起/恢复 | 设置 → 模型 → Provider 卡片上的开关 | 按该卡片自己的 `settingsPath` 定位：用户层有该 Provider 配置时暂存并 unset 这棵子树，纯组合层时写 `models: []` 覆盖；同族其他 Provider 不受影响，恢复时写回 |
 
 所有状态持久化在浏览器 localStorage 单键 `dsh.sidebar-visibility.v1`，与官方侧栏展开状态同一惯例。
 
@@ -48,7 +48,7 @@ pnpm run bundle     # 产出 lib/index.js + lib/client.js
   - 分叉：点「分叉」→ 从该会话的最后一个完整回合切出新会话并打开。
   - 归档：点「归档」→ 会话从树中消失，可在「设置 → 已归档会话」恢复。
 - **收藏会话**：会话行点 ☆ 变 ★；勾选树顶「仅收藏」后全树只显示收藏行，标题栏显示收藏数。
-- **挂起 Provider**：设置 → 模型，在目标卡片点「挂起 Provider」→ 该 Provider 配置被暂存、模型从选择器消失；同位置点「恢复 Provider」写回。挂起期间新会话无法选到该 Provider；已固定在它上面的存量会话预期进入不可路由禁用态，恢复后自动解除（此点为首验清单第 2 项）。
+- **挂起 Provider**：设置 → 模型，在目标卡片点「挂起 Provider」→ 该 Provider 的配置被暂存、模型从选择器消失；同位置点「恢复 Provider」写回。**粒度是该卡片自己的 `settingsPath`**，同一命名空间下的其他 Provider 不受影响。挂起期间新会话无法选到该 Provider；已固定在它上面的存量会话预期进入不可路由禁用态，恢复后自动解除（此点为首验清单第 2 项）。
 
 ## 复核确认的事实（本版代码的全部依据）
 
@@ -61,6 +61,8 @@ pnpm run bundle     # 产出 lib/index.js + lib/client.js
 - 官方会话行菜单：`dsh-client-ui-workspace` 的 `SessionNodeItem` 提供 `rename / fork / archive` 三项（工作区行另有 `rename / delete`，本插件未实现）；`rowActions` 平时隐藏、行悬停显示，本插件用 `.dshsv-rowActions` + 内联 `<style>` 复刻该行为，并把三个动作改为标题行下方的竖排，避免窄侧栏里遮挡会话名。
 - 官方新建会话按钮：工作区行右侧的加号（`IconPlusOutline16`）在 `onClick` 里先 `setGroupExpanded(key, true)` 再 `startSession(workspaceId)`；本插件按同一语义实现，折叠态下点击会先解除折叠。
 - 侧栏按钮尺寸：浏览器默认 `button` 样式在窄侧栏里偏大，本插件统一用 `.dshsv-btn` 压到 11px / 16px 行高 / `1px 6px` 内边距，悬停给一层浅底色。
+- 席位派发粒度（踩过坑）：`settings.models.provider-card` 按 `settingsNs` 派发 —— 注册一次会收到该命名空间下的**每一张**卡片（已保存、新增、手写声明的都算），每张卡片带自己的 `settingsPath`（官方 slot-contract 原文：an adapter family's companion plugin registers one entry under the family's namespace and receives every card of that family）。因此挂起/恢复必须按 `settingsPath` 定位；动整个命名空间会把同族 Provider 一起清掉。官方删除 Provider 用的也是 `{ op: 'unset', path: [...settingsPath] }`。
+- 根级 Provider（`settingsPath` 为空，如 `deepseek-official` 之于 `llm-deepseek`）拥有整个命名空间：挂起走用户层整段逐键 unset，恢复必须用 `update(ns, section)` 整段合并写回 —— 空路径无法用 `mutate set path: []` 寻址命名空间根。
 - settings 写读：`ctx.remote.settings.describe() → { user?, revision }`；`update / replace / mutate(ns, [{ op: 'set'|'unset', path, value? }], expectedRevision)`（op 先例 `pathOps()`）；Provider 卡片 owner props 携带 `settingsPath` 直接给出用户层寻址路径。
 
 ## 首验清单（实跑时按序确认）
