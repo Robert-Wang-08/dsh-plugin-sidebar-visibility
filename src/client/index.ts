@@ -26,8 +26,12 @@ import { WorkspaceTree } from './WorkspaceTree.tsx'
  * `sessions` 是官方查找能力的来源：官方 WorkspaceBrowser 的内容检索走
  * `ctx.get('sessions').search(query, signal)`（Host 可见消息内容索引），
  * 该服务也是官方 ui-workspace 的 inject 项之一。
+ *
+ * `workspaces` 是工作区排序的来源：拖拽排序走纯 Workspace Controller 的
+ * `insertBefore`，与官方 browserInjected() 同一条路径；`uiWorkspace` 只有
+ * 导航与归档动作，不含排序。
  */
-export const inject = ['slots', 'uiWorkspace', 'sessions', 'remote', 'remote.settings']
+export const inject = ['slots', 'uiWorkspace', 'sessions', 'workspaces', 'remote', 'remote.settings']
 
 /** Provider 卡片席位按命名空间注册的 key 清单。 */
 const PROVIDER_CARD_KEYS = ['llm-deepseek', 'llm-pi-ai']
@@ -58,6 +62,15 @@ interface SessionsFace {
     | undefined
 }
 
+/** `workspaces` 服务上本插件用到的那一面（官方 IWorkspaces 的子集）。 */
+interface WorkspacesFace {
+  /**
+   * 把 workspaceId 移到 beforeWorkspaceId 之前；beforeWorkspaceId 省略表示移到末尾。
+   * 官方 browserInjected() 的 insertWorkspaceBefore 走同一条路径。
+   */
+  insertBefore(workspaceId: string, beforeWorkspaceId?: string): Promise<void>
+}
+
 interface VisibilityClientContext extends Context {
   slots: {
     inject: (seat: string, factory: () => unknown) => void
@@ -76,6 +89,7 @@ interface VisibilityClientContext extends Context {
 export function apply(ctx: Context) {
   const client = ctx as VisibilityClientContext
   const sessions = client.get?.('sessions') as SessionsFace | undefined
+  const workspaces = client.get?.('workspaces') as WorkspacesFace | undefined
 
   // 工作区树席位：遮蔽官方占用者，动作面走官方导航服务。
   client.slots.inject('sidebar.workspaces', () =>
@@ -103,6 +117,13 @@ export function apply(ctx: Context) {
           },
           // 内容检索：官方 WorkspaceBrowser 的同一 Host 索引 RPC。
           searchSessions: (query: string, signal: AbortSignal) => sessions?.search(query, signal),
+          /*
+           * 工作区拖拽排序：官方 browserInjected() 的 insertWorkspaceBefore 走纯
+           * Workspace Controller 的 insertBefore；anchor 省略表示移到末尾。
+           */
+          insertWorkspaceBefore: async (workspaceId: string, beforeWorkspaceId?: string) => {
+            await workspaces?.insertBefore(workspaceId, beforeWorkspaceId)
+          },
         }),
       },
       WorkspaceTree,

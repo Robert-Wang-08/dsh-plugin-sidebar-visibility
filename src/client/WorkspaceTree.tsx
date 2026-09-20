@@ -71,6 +71,8 @@ export interface WorkspaceTreeProps {
   renameSession?: (sessionId: string, title: string) => Promise<void>
   forkSession?: (sessionId: string) => void
   archiveSession?: (sessionId: string) => Promise<void>
+  /** 工作区排序：把 workspaceId 移到 beforeWorkspaceId 之前；省略表示移到末尾。 */
+  insertWorkspaceBefore?: (workspaceId: string, beforeWorkspaceId?: string) => Promise<void>
   t?: (key: string) => string
 }
 
@@ -91,7 +93,7 @@ interface SearchRow {
 }
 
 export function WorkspaceTree(props: WorkspaceTreeProps) {
-  const { useSessions, useWorkspaces, open, startSession, searchSessions, renameSession, forkSession, archiveSession } = props
+  const { useSessions, useWorkspaces, open, startSession, searchSessions, renameSession, forkSession, archiveSession, insertWorkspaceBefore } = props
   const [, force] = React.useReducer((n: number) => n + 1, 0)
   React.useEffect(() => subscribeVisibility(() => force()), [])
   const [favoritesOnly, setFavoritesOnly] = React.useState(false)
@@ -106,6 +108,14 @@ export function WorkspaceTree(props: WorkspaceTreeProps) {
   const [renaming, setRenaming] = React.useState<{ id: string; draft: string } | null>(null)
   const [renameBusy, setRenameBusy] = React.useState(false)
   const [renameError, setRenameError] = React.useState<string | undefined>(undefined)
+  /*
+   * 工作区拖拽排序状态。与官方 SessionTree 的 workspaceDrag 同形：记录被拖的
+   * workspaceId，以及当前悬停目标与插入半边（before / after）。
+   */
+  const [workspaceDrag, setWorkspaceDrag] = React.useState<
+    { workspaceId: string; over: { id: string; half: 'before' | 'after' } | null } | null
+  >(null)
+  const workspaceDropCommitted = React.useRef(false)
 
   const prefs = getVisibility()
   const favorites = new Set(prefs.favoriteSessionIds)
@@ -436,6 +446,52 @@ export function WorkspaceTree(props: WorkspaceTreeProps) {
     )
   }
 
+  // ---- 工作区拖拽排序 -------------------------------------------------------
+
+  /** 落点半边：指针在整组的上半 → 插到它前面，下半 → 插到它后面（官方 workspaceGroupHalf）。 */
+  const workspaceHalfOf = (e: React.DragEvent<HTMLElement>): 'before' | 'after' => {
+    const rect = e.currentTarget.getBoundingClientRect()
+    return e.clientY < rect.top + rect.height / 2 ? 'before' : 'after'
+  }
+
+  /**
+   * 提交排序。锚点是「插到谁之前」，省略表示移到末尾；自身位置与相邻同位这两种
+   * 无变化情形直接返回，不发请求。与官方 commitWorkspaceDrag 逐条一致。
+   */
+  const commitWorkspaceDrag = (
+    activeDrag: { workspaceId: string },
+    over: { id: string; half: 'before' | 'after' },
+  ) => {
+    if (workspaceDropCommitted.current) return
+    workspaceDropCommitted.current = true
+    setWorkspaceDrag(null)
+    const rowIndex = workspaces.findIndex((w) => w.workspaceId === over.id)
+    if (rowIndex === -1) return
+    const anchor = over.half === 'before' ? over.id : workspaces[rowIndex + 1]?.workspaceId
+    if (anchor === activeDrag.workspaceId) return
+    const sourceIndex = workspaces.findIndex((w) => w.workspaceId === activeDrag.workspaceId)
+    const anchorIndex = anchor === undefined ? workspaces.length : workspaces.findIndex((w) => w.workspaceId === anchor)
+    if (sourceIndex !== -1 && (anchorIndex === sourceIndex || anchorIndex === sourceIndex + 1)) return
+    insertWorkspaceBefore?.(activeDrag.workspaceId, anchor).catch((reason: unknown) => {
+      console.warn('workspace reorder rejected:', reason)
+    })
+  }
+
+  const startWorkspaceDrag = (workspaceId: string) => {
+    workspaceDropCommitted.current = false
+    setWorkspaceDrag({ workspaceId, over: null })
+  }
+
+  const endWorkspaceDrag = () => {
+    if (workspaceDrag !== null && workspaceDrag.over !== null) commitWorkspaceDrag(workspaceDrag, workspaceDrag.over)
+    else setWorkspaceDrag(null)
+    workspaceDropCommitted.current = false
+  }
+
+  const hoverWorkspace = (workspaceId: string, half: 'before' | 'after') => {
+    setWorkspaceDrag((active) => (active === null ? active : { ...active, over: { id: workspaceId, half } }))
+  }
+
   function workspaceBlock(g: Group, isHidden: boolean) {
     const isCollapsed = collapsed.has(g.key)
     // 折叠与隐藏都收起组内会话；隐藏还会把整组挪到树底折叠区，折叠保留分组位置。
@@ -448,12 +504,47 @@ export function WorkspaceTree(props: WorkspaceTreeProps) {
     const rows = expanded
       ? g.sessions.map((s) => sessionRow(s)).filter((row): row is React.ReactElement => row !== null)
       : []
+    // 拖拽落点标记：只有真实工作区参与排序，「未分组」伪组既不拖也不作为落点。
+    const dropMarker =
+      g.workspace !== null && workspaceDrag !== null && workspaceDrag.over?.id === g.key ? workspaceDrag.over.half : null
     return React.createElement(
       'div',
-      { key: g.key, style: { marginBottom: 6 } },
+      {
+        key: g.key,
+        className:
+          dropMarker === 'before' ? 'dshsv-dropBefore' : dropMarker === 'after' ? 'dshsv-dropAfter' : undefined,
+        style: { marginBottom: 6 },
+        onDragOver:
+          g.workspace === null || workspaceDrag === null
+            ? undefined
+            : (e: React.DragEvent<HTMLElement>) => {
+                e.preventDefault()
+                e.dataTransfer.dropEffect = 'move'
+                hoverWorkspace(g.key, workspaceHalfOf(e))
+              },
+        onDrop:
+          g.workspace === null || workspaceDrag === null
+            ? undefined
+            : (e: React.DragEvent<HTMLElement>) => {
+                e.preventDefault()
+                commitWorkspaceDrag(workspaceDrag, { id: g.key, half: workspaceHalfOf(e) })
+              },
+      },
       React.createElement(
         'div',
-        { style: { display: 'flex', alignItems: 'center', gap: 4, padding: '2px 8px', fontWeight: 600 } },
+        {
+          draggable: g.workspace !== null,
+          onDragStart:
+            g.workspace === null
+              ? undefined
+              : (e: React.DragEvent<HTMLElement>) => {
+                  e.dataTransfer.effectAllowed = 'move'
+                  e.dataTransfer.setData('text/plain', g.key)
+                  startWorkspaceDrag(g.key)
+                },
+          onDragEnd: g.workspace === null ? undefined : endWorkspaceDrag,
+          style: { display: 'flex', alignItems: 'center', gap: 4, padding: '2px 8px', fontWeight: 600 },
+        },
         isHidden
           ? null
           : React.createElement(
@@ -573,7 +664,14 @@ export function WorkspaceTree(props: WorkspaceTreeProps) {
       '.dshsv-caret:hover{opacity:1;background:transparent}' +
       '.dshsv-rowActions{display:none;flex-direction:column;align-items:stretch;gap:1px;margin-top:1px}' +
       '.dshsv-sessionRow:hover .dshsv-rowActions{display:flex}' +
-      '.dshsv-rowActions .dshsv-btn{text-align:left;width:100%}',
+      '.dshsv-rowActions .dshsv-btn{text-align:left;width:100%}' +
+      /*
+       * 工作区拖拽落点：用 box-shadow 画 2px 主色线。
+       * 不用 ::before/::after + content：React 会把引号转义成实体，而 <style>
+       * 是 raw text 元素不解码，content 声明会失效；box-shadow 既无引号也不占布局。
+       */
+      '.dshsv-dropBefore{box-shadow:0 -2px 0 0 var(--dsw-alias-state-business-primary,#4c8dff)}' +
+      '.dshsv-dropAfter{box-shadow:0 2px 0 0 var(--dsw-alias-state-business-primary,#4c8dff)}',
   )
 
   /*
