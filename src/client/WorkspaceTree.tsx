@@ -91,7 +91,7 @@ interface SearchRow {
 }
 
 export function WorkspaceTree(props: WorkspaceTreeProps) {
-  const { useSessions, useWorkspaces, open, searchSessions, renameSession, forkSession, archiveSession } = props
+  const { useSessions, useWorkspaces, open, startSession, searchSessions, renameSession, forkSession, archiveSession } = props
   const [, force] = React.useReducer((n: number) => n + 1, 0)
   React.useEffect(() => subscribeVisibility(() => force()), [])
   const [favoritesOnly, setFavoritesOnly] = React.useState(false)
@@ -318,25 +318,32 @@ export function WorkspaceTree(props: WorkspaceTreeProps) {
   function sessionRow(s: SessionSummaryLike, snippet?: string) {
     if (favoritesOnly && !favorites.has(s.id)) return null
     const editing = renaming !== null && renaming.id === s.id ? renaming : null
+
+    /*
+     * 动作竖排在标题行下方，标题因此独占整行宽度。
+     * 三者原先与标题同排，窄侧栏里会盖住会话名，且按钮贴得太近容易误点。
+     */
     const actions = React.createElement(
       'span',
       { className: 'dshsv-rowActions' },
-      React.createElement('button', { type: 'button', title: '重命名该会话', onClick: () => startRename(s) }, '重命名'),
+      React.createElement('button', { type: 'button', className: 'dshsv-btn', title: '重命名该会话', onClick: () => startRename(s) }, '重命名'),
       React.createElement(
         'button',
-        { type: 'button', title: '从该会话的最后一个完整回合分叉出新会话', onClick: () => forkSession?.(s.id) },
+        { type: 'button', className: 'dshsv-btn', title: '从该会话的最后一个完整回合分叉出新会话', onClick: () => forkSession?.(s.id) },
         '分叉',
       ),
       React.createElement(
         'button',
         {
           type: 'button',
+          className: 'dshsv-btn',
           title: '归档该会话（可在「设置 → 已归档会话」恢复）',
           onClick: () => requestArchive(s.id),
         },
         '归档',
       ),
     )
+
     return React.createElement(
       'div',
       {
@@ -345,76 +352,87 @@ export function WorkspaceTree(props: WorkspaceTreeProps) {
         className: 'dshsv-sessionRow',
         style: {
           display: 'flex',
-          alignItems: 'center',
-          gap: 4,
+          flexDirection: 'column',
+          gap: 2,
           padding: '2px 8px',
           cursor: 'pointer',
           background: s.id === current ? 'rgba(128,128,128,0.15)' : undefined,
         },
       },
+      // 第一行：标题占满宽度，收藏常显在右端。
       React.createElement(
-        'span',
-        { style: { flex: 1, minWidth: 0 } },
-        editing === null
-          ? React.createElement(
-              'span',
-              {
-                style: { display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
-                onClick: () => open?.(s.id),
-              },
-              s.displayTitle || s.title || s.id,
-            )
-          : React.createElement('input', {
-              type: 'text',
-              value: editing.draft,
-              autoFocus: true,
-              disabled: renameBusy,
-              'aria-label': '重命名会话',
-              style: { width: '100%', boxSizing: 'border-box', fontSize: 12, padding: '1px 4px' },
-              onChange: (e: React.ChangeEvent<HTMLInputElement>) => setRenaming({ id: s.id, draft: e.target.value }),
-              onKeyDown: (e: React.KeyboardEvent<HTMLInputElement>) => {
-                if (e.key === 'Enter') {
-                  e.preventDefault()
-                  confirmRename()
-                } else if (e.key === 'Escape') {
-                  e.preventDefault()
-                  cancelRename()
-                }
-              },
-            }),
-        snippet === undefined || editing !== null
-          ? null
-          : React.createElement(
-              'span',
-              {
-                style: {
-                  display: 'block',
-                  fontSize: 11,
-                  opacity: 0.7,
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
+        'div',
+        { style: { display: 'flex', alignItems: 'center', gap: 4 } },
+        React.createElement(
+          'span',
+          { style: { flex: 1, minWidth: 0 } },
+          editing === null
+            ? React.createElement(
+                'span',
+                {
+                  style: { display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+                  onClick: () => open?.(s.id),
                 },
-              },
-              snippet,
-            ),
-        editing !== null && renameError !== undefined
-          ? React.createElement('span', { style: { display: 'block', fontSize: 10, opacity: 0.8 } }, renameError)
-          : null,
+                s.displayTitle || s.title || s.id,
+              )
+            : React.createElement('input', {
+                type: 'text',
+                value: editing.draft,
+                autoFocus: true,
+                disabled: renameBusy,
+                'aria-label': '重命名会话',
+                style: { width: '100%', boxSizing: 'border-box', fontSize: 11, padding: '1px 4px' },
+                onChange: (e: React.ChangeEvent<HTMLInputElement>) => setRenaming({ id: s.id, draft: e.target.value }),
+                onKeyDown: (e: React.KeyboardEvent<HTMLInputElement>) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault()
+                    confirmRename()
+                  } else if (e.key === 'Escape') {
+                    e.preventDefault()
+                    cancelRename()
+                  }
+                },
+              }),
+          snippet === undefined || editing !== null
+            ? null
+            : React.createElement(
+                'span',
+                {
+                  style: {
+                    display: 'block',
+                    fontSize: 10,
+                    opacity: 0.7,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  },
+                },
+                snippet,
+              ),
+          editing !== null && renameError !== undefined
+            ? React.createElement('span', { style: { display: 'block', fontSize: 10, opacity: 0.8 } }, renameError)
+            : null,
+        ),
+        React.createElement(
+          'button',
+          {
+            type: 'button',
+            className: 'dshsv-btn',
+            title: favorites.has(s.id) ? '取消收藏' : '收藏',
+            onClick: () => toggleFavoriteSession(s.id),
+          },
+          favorites.has(s.id) ? '★' : '☆',
+        ),
       ),
+      // 第二行：竖排动作。重命名进行中换成 确定 / 取消 并常显。
       editing === null
         ? actions
         : React.createElement(
             'span',
-            { className: 'dshsv-rowActions', style: { display: 'inline-flex' } },
-            React.createElement('button', { type: 'button', disabled: renameBusy, onClick: confirmRename }, '确定'),
-            React.createElement('button', { type: 'button', disabled: renameBusy, onClick: cancelRename }, '取消'),
+            { className: 'dshsv-rowActions', style: { display: 'flex' } },
+            React.createElement('button', { type: 'button', className: 'dshsv-btn', disabled: renameBusy, onClick: confirmRename }, '确定'),
+            React.createElement('button', { type: 'button', className: 'dshsv-btn', disabled: renameBusy, onClick: cancelRename }, '取消'),
           ),
-      React.createElement(
-        'button',
-        { type: 'button', title: favorites.has(s.id) ? '取消收藏' : '收藏', onClick: () => toggleFavoriteSession(s.id) },
-        favorites.has(s.id) ? '★' : '☆',
-      ),
     )
   }
 
@@ -442,10 +460,10 @@ export function WorkspaceTree(props: WorkspaceTreeProps) {
               'button',
               {
                 type: 'button',
+                className: 'dshsv-btn dshsv-caret',
                 'aria-expanded': !isCollapsed,
                 'aria-label': `${isCollapsed ? '展开' : '折叠'}工作区 ${g.title}`,
                 title: isCollapsed ? '展开该工作区' : '折叠该工作区（收起组内会话）',
-                style: caretStyle,
                 onClick: () => toggleCollapsedWorkspace(g.key),
               },
               isCollapsed ? '▸' : '▾',
@@ -473,10 +491,28 @@ export function WorkspaceTree(props: WorkspaceTreeProps) {
               'button',
               {
                 type: 'button',
+                className: 'dshsv-btn',
                 title: isHidden ? '恢复显示该工作区' : '隐藏该工作区（可恢复，会话数据不受影响）',
                 onClick: () => toggleHiddenWorkspace(g.key),
               },
               isHidden ? '恢复' : '隐藏',
+            )
+          : null,
+        // 新建会话：与官方项目行右侧的加号同一语义，先展开分组再进入新建流程。
+        g.workspace
+          ? React.createElement(
+              'button',
+              {
+                type: 'button',
+                className: 'dshsv-btn',
+                'aria-label': `在“${g.title}”中新建会话`,
+                title: `在“${g.title}”中新建会话`,
+                onClick: () => {
+                  if (isCollapsed) toggleCollapsedWorkspace(g.key)
+                  startSession?.(g.key)
+                },
+              },
+              '+',
             )
           : null,
       ),
@@ -484,19 +520,6 @@ export function WorkspaceTree(props: WorkspaceTreeProps) {
     )
   }
 
-  /** 折叠箭头：无边框按钮，尺寸固定以免折叠 / 展开时标题横向跳动。 */
-  const caretStyle: React.CSSProperties = {
-    border: 'none',
-    background: 'transparent',
-    color: 'inherit',
-    padding: 0,
-    width: 14,
-    fontSize: 10,
-    lineHeight: 1,
-    cursor: 'pointer',
-    opacity: 0.7,
-    flexShrink: 0,
-  }
   const selectStyle: React.CSSProperties = { fontSize: 11, maxWidth: 108 }
   const searchInputStyle: React.CSSProperties = {
     flex: 1,
@@ -530,18 +553,27 @@ export function WorkspaceTree(props: WorkspaceTreeProps) {
   }
 
   /*
-   * 行内动作（重命名 / 分叉 / 归档）平时隐藏、悬停显示，与官方
-   * `YDXeBa_rowActions` 的行为一致，避免窄侧栏里标题被按钮挤没。
+   * 本插件不引入样式表，只把需要 `:hover` 与「浏览器默认 button 太大」这两类
+   * 内联样式表达不了的东西放在这里，前缀固定 `.dshsv-`，避免引入 React 悬停
+   * 状态（会话可达数百，悬停重渲染整棵树不划算）。
    *
-   * 本插件不引入样式表，只有这一处需要 `:hover`；用一段固定前缀的内联
-   * <style> 表达，避免为悬停引入 React 状态（会话可达数百，悬停重渲染整棵树
-   * 不划算）。重命名进行中时用内联 `display:inline-flex` 覆盖，保持常显。
+   * - `.dshsv-btn`：侧栏内的紧凑按钮，默认 button 在窄侧栏里偏大。
+   * - `.dshsv-caret`：折叠箭头，固定宽度以免折叠 / 展开时标题横向跳动。
+   * - `.dshsv-rowActions`：会话动作竖排，平时隐藏、行悬停显示，与官方
+   *   `YDXeBa_rowActions` 的行为一致。重命名进行中时用内联 `display:flex`
+   *   覆盖，保持常显。
    */
   const styleTag = React.createElement(
     'style',
     null,
-    '.dshsv-rowActions{display:none;align-items:center;gap:8px;flex:none}' +
-      '.dshsv-sessionRow:hover .dshsv-rowActions{display:inline-flex}',
+    '.dshsv-btn{font-size:11px;line-height:16px;padding:1px 6px;border:none;background:transparent;color:inherit;border-radius:4px;cursor:pointer;flex:none;font-family:inherit}' +
+      '.dshsv-btn:hover{background:rgba(128,128,128,0.22)}' +
+      '.dshsv-btn:disabled{opacity:0.5;cursor:default;background:transparent}' +
+      '.dshsv-caret{width:14px;padding:0;font-size:10px;opacity:0.7}' +
+      '.dshsv-caret:hover{opacity:1;background:transparent}' +
+      '.dshsv-rowActions{display:none;flex-direction:column;align-items:stretch;gap:1px;margin-top:1px}' +
+      '.dshsv-sessionRow:hover .dshsv-rowActions{display:flex}' +
+      '.dshsv-rowActions .dshsv-btn{text-align:left;width:100%}',
   )
 
   /*
@@ -642,8 +674,8 @@ export function WorkspaceTree(props: WorkspaceTreeProps) {
             'button',
             {
               type: 'button',
+              className: 'dshsv-btn',
               title: allCollapsed ? '展开所有工作区分组' : '折叠所有工作区分组（收起组内会话）',
-              style: { fontSize: 11, padding: '1px 6px' },
               onClick: toggleAllCollapsed,
             },
             allCollapsed ? '全部展开' : '全部折叠',
