@@ -83,3 +83,13 @@ pnpm run bundle     # 产出 lib/index.js + lib/client.js
 - 迭代 1（当前）：挂载跑通 + 七功能最小闭环（隐藏 / 折叠 / 工作区拖拽排序 / 新建会话 / 会话行动作 / 收藏 / Provider 挂起）。
 - 迭代 2：subagent `allowedModels` 快照剔除；树内搜索框与「仅收藏」对 Host 内容搜索的二次过滤；account key 对齐；补齐官方树交互（会话级拖拽排序、工作区重命名 / 删除）。
 - 迭代 3：评估给上游提 `hiddenWorkspaceIds` / `favoriteSessionIds` / `collapsedWorkspaceIds`（照 `archivedSessionIds` 模式进 Host 基线）。
+
+## 宿主兼容性（2026-09-23 复查：dsh 0.1.5-rc.3 + dsh-permission-compat）
+
+宿主升级 `0.1.5-rc.2 → rc.3`（npm latest）并打上全局 `dsh-permission-compat` 沙箱补丁（改 `dsh-sandbox` + 三个工具守卫）后复查，**本插件零改动可用**：
+
+- 与补丁无关：源码与构建产物（`lib/index.js`、`lib/client.js`）不引用 `sandbox_permissions` / `justification` / `approveEscalation` 等提权 API（grep 零命中）。
+- 与 rc.3 无关：rc.3 的 `dsh-client-ui-sidebar/lib/client.js` 相比 rc.2 仅 `localBuildVersion()` 里品牌徽标版本号字符串 1 行差异，无 API/行为变化，本插件不依赖该值。
+- 已知构建现状（非本次引入）：`src/index.ts` import 了 `@deepseek-ai/dsh-api-settings-controller`，但构建出的 `lib/index.js` 是无 import 的 199B 占位 stub——rc.3 下无影响；下次改动本插件时核对 `tsdown.config.ts`。
+
+复查记录见 vault `70-WorkSpace/dsh工具维护日志.md` 2026-09-23 条目；复装说明见 `70-WorkSpace/dsh复装说明.md`。
