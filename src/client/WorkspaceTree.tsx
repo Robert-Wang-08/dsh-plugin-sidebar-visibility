@@ -330,23 +330,24 @@ export function WorkspaceTree(props: WorkspaceTreeProps) {
     const editing = renaming !== null && renaming.id === s.id ? renaming : null
 
     /*
-     * 动作竖排在标题行下方，标题因此独占整行宽度。
-     * 三者原先与标题同排，窄侧栏里会盖住会话名，且按钮贴得太近容易误点。
+     * 动作横排在标题行下方的独立一行里（2026-09-23 决策，回调 2026-09-18 的
+     * 竖排：竖排占三行太高，横排只在这一行内排布，标题仍独占上一行，不会盖名）。
+     * 按钮用 .dshsv-btnSm 缩小，保证整行高度停在 3–4 行文字内。
      */
     const actions = React.createElement(
       'span',
       { className: 'dshsv-rowActions' },
-      React.createElement('button', { type: 'button', className: 'dshsv-btn', title: '重命名该会话', onClick: () => startRename(s) }, '重命名'),
+      React.createElement('button', { type: 'button', className: 'dshsv-btn dshsv-btnSm', title: '重命名该会话', onClick: () => startRename(s) }, '重命名'),
       React.createElement(
         'button',
-        { type: 'button', className: 'dshsv-btn', title: '从该会话的最后一个完整回合分叉出新会话', onClick: () => forkSession?.(s.id) },
+        { type: 'button', className: 'dshsv-btn dshsv-btnSm', title: '从该会话的最后一个完整回合分叉出新会话', onClick: () => forkSession?.(s.id) },
         '分叉',
       ),
       React.createElement(
         'button',
         {
           type: 'button',
-          className: 'dshsv-btn',
+          className: 'dshsv-btn dshsv-btnSm',
           title: '归档该会话（可在「设置 → 已归档会话」恢复）',
           onClick: () => requestArchive(s.id),
         },
@@ -359,14 +360,16 @@ export function WorkspaceTree(props: WorkspaceTreeProps) {
       {
         key: s.id,
         'data-session-id': s.id,
-        className: 'dshsv-sessionRow',
+        /*
+         * 背景与内边距全部走样式段：行底色有三层优先级（悬停 > 当前 > 斑马纹），
+         * 内联样式会同时压死斑马纹和悬停底色，故只把布局留在内联。
+         */
+        className: s.id === current ? 'dshsv-sessionRow dshsv-currentRow' : 'dshsv-sessionRow',
         style: {
           display: 'flex',
           flexDirection: 'column',
-          gap: 2,
-          padding: '2px 8px',
+          gap: 4,
           cursor: 'pointer',
-          background: s.id === current ? 'rgba(128,128,128,0.15)' : undefined,
         },
       },
       // 第一行：标题占满宽度，收藏常显在右端。
@@ -434,14 +437,14 @@ export function WorkspaceTree(props: WorkspaceTreeProps) {
           favorites.has(s.id) ? '★' : '☆',
         ),
       ),
-      // 第二行：竖排动作。重命名进行中换成 确定 / 取消 并常显。
+      // 第二行：动作行，横排小按钮。重命名进行中换成 确定 / 取消 并常显。
       editing === null
         ? actions
         : React.createElement(
             'span',
             { className: 'dshsv-rowActions', style: { display: 'flex' } },
-            React.createElement('button', { type: 'button', className: 'dshsv-btn', disabled: renameBusy, onClick: confirmRename }, '确定'),
-            React.createElement('button', { type: 'button', className: 'dshsv-btn', disabled: renameBusy, onClick: cancelRename }, '取消'),
+            React.createElement('button', { type: 'button', className: 'dshsv-btn dshsv-btnSm', disabled: renameBusy, onClick: confirmRename }, '确定'),
+            React.createElement('button', { type: 'button', className: 'dshsv-btn dshsv-btnSm', disabled: renameBusy, onClick: cancelRename }, '取消'),
           ),
     )
   }
@@ -607,7 +610,9 @@ export function WorkspaceTree(props: WorkspaceTreeProps) {
             )
           : null,
       ),
-      expanded ? rows : null,
+      // 行列表包一层 .dshsv-rowList：斑马纹按「行列表的直接子元素序数」取色，
+      // 组头不参与计数。
+      expanded ? React.createElement('div', { className: 'dshsv-rowList' }, rows) : null,
     )
   }
 
@@ -650,9 +655,12 @@ export function WorkspaceTree(props: WorkspaceTreeProps) {
    *
    * - `.dshsv-btn`：侧栏内的紧凑按钮，默认 button 在窄侧栏里偏大。
    * - `.dshsv-caret`：折叠箭头，固定宽度以免折叠 / 展开时标题横向跳动。
-   * - `.dshsv-rowActions`：会话动作竖排，平时隐藏、行悬停显示，与官方
+   * - `.dshsv-btnSm`：会话动作行的更小按钮（重命名 / 分叉 / 归档、确定 / 取消）。
+   * - `.dshsv-rowActions`：会话动作横排，平时隐藏、行悬停显示，与官方
    *   `YDXeBa_rowActions` 的行为一致。重命名进行中时用内联 `display:flex`
-   *   覆盖，保持常显。
+   *   覆盖，保持常显。只占标题下方一行，不与标题同排（2026-09-18 教训）。
+   * - 行底色三层按优先级从低到高书写：斑马纹 → 当前会话 → 悬停。同优先级
+   *   规则后写者胜，因此悬停能盖过当前会话，当前会话能盖过斑马纹。
    */
   const styleTag = React.createElement(
     'style',
@@ -660,11 +668,20 @@ export function WorkspaceTree(props: WorkspaceTreeProps) {
     '.dshsv-btn{font-size:11px;line-height:16px;padding:1px 6px;border:none;background:transparent;color:inherit;border-radius:4px;cursor:pointer;flex:none;font-family:inherit}' +
       '.dshsv-btn:hover{background:rgba(128,128,128,0.22)}' +
       '.dshsv-btn:disabled{opacity:0.5;cursor:default;background:transparent}' +
+      '.dshsv-btnSm{font-size:10px;line-height:14px;padding:0 5px}' +
       '.dshsv-caret{width:14px;padding:0;font-size:10px;opacity:0.7}' +
       '.dshsv-caret:hover{opacity:1;background:transparent}' +
-      '.dshsv-rowActions{display:none;flex-direction:column;align-items:stretch;gap:1px;margin-top:1px}' +
+      '.dshsv-rowActions{display:none;flex-direction:row;align-items:center;gap:4px;margin-top:2px}' +
       '.dshsv-sessionRow:hover .dshsv-rowActions{display:flex}' +
-      '.dshsv-rowActions .dshsv-btn{text-align:left;width:100%}' +
+      '.dshsv-rowActions .dshsv-btn{text-align:center;flex:none}' +
+      // 隔行设色（最低层）：行列表的直接子元素按序数取色，组头 / 计数行不在列表内。
+      '.dshsv-rowList > :nth-child(even){background:rgba(128,128,128,0.08)}' +
+      // 行内边距走样式段，悬停才能改 padding 做抬升；内联只留布局。
+      '.dshsv-sessionRow{padding:4px 8px;transition:background .1s ease,padding .1s ease}' +
+      // 当前会话（中间层）：内联底色已移除，靠类名与斑马纹分层。
+      '.dshsv-sessionRow.dshsv-currentRow{background:rgba(128,128,128,0.15)}' +
+      // 悬停（最高层）：加内边距放大命中区做出抬升感；横排单行动作使行高有界。
+      '.dshsv-sessionRow:hover{background:rgba(128,128,128,0.25);padding:7px 8px}' +
       /*
        * 工作区拖拽落点：用 box-shadow 画 2px 主色线。
        * 不用 ::before/::after + content：React 会把引号转义成实体，而 <style>
@@ -804,18 +821,22 @@ export function WorkspaceTree(props: WorkspaceTreeProps) {
               { style: { padding: '4px 8px', opacity: 0.7 } },
               searchPhase === 'loading' ? '检索中…' : '没有匹配的会话',
             )
-          : shown.map((row) =>
-              React.createElement(
-                'div',
-                { key: row.session.id },
-                row.workspaceLabel === undefined
-                  ? null
-                  : React.createElement(
-                      'div',
-                      { style: { padding: '2px 8px 0', fontSize: 10, opacity: 0.6 } },
-                      row.workspaceLabel,
-                    ),
-                sessionRow(row.session, row.snippet),
+          : React.createElement(
+              'div',
+              { className: 'dshsv-rowList' },
+              shown.map((row) =>
+                React.createElement(
+                  'div',
+                  { key: row.session.id },
+                  row.workspaceLabel === undefined
+                    ? null
+                    : React.createElement(
+                        'div',
+                        { style: { padding: '2px 8px 0', fontSize: 10, opacity: 0.6 } },
+                        row.workspaceLabel,
+                      ),
+                  sessionRow(row.session, row.snippet),
+                ),
               ),
             ),
       ),
@@ -833,7 +854,11 @@ export function WorkspaceTree(props: WorkspaceTreeProps) {
         { style: { padding: '2px 8px', fontSize: 11, opacity: 0.7 } },
         `${flatRows.length} 个会话`,
       ),
-      flatRows.map((s) => sessionRow(s)),
+      React.createElement(
+        'div',
+        { className: 'dshsv-rowList' },
+        flatRows.map((s) => sessionRow(s)),
+      ),
     )
   } else {
     body = React.createElement(
