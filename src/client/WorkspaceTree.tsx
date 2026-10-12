@@ -14,16 +14,18 @@
  * 全部留在包内（`./client` 只导出类型与 apply/inject），无法复用，故按官方语义
  * 本地实现，并沿用官方 viewing store 的默认值（workspace + updated）。
  *
- * 在此之上另有两项本插件自有能力：
+ * 在此之上另有三项本插件自有能力：
  *   - 工作区隐藏 / 收藏会话 / 仅收藏（见 ./visibility-store.ts）
+ *   - 会话置顶：跨工作区的全局「置顶（N）」区，复用官方 Host 置顶存储
+ *     （WorkspaceSnapshot.pinnedSessionIds），区外分组不再重复显示
  *   - 工作区分组折叠：点标题行箭头或标题本身收起该组会话行，标题行保留原位；
  *     折叠态随其余偏好一起持久化在同一个 localStorage 键。
  *
  * 数据来源（GlobalStandardProps，框架统一注入）：
- * - useWorkspaces → WorkspaceSnapshot { items: WorkspaceView[], archivedSessionIds }
+ * - useWorkspaces → WorkspaceSnapshot { items: WorkspaceView[], archivedSessionIds, pinnedSessionIds }
  * - useSessions → SessionListState { ids, byId: SessionSummary, current }
  * 动作面来自本包注册时 inject 的 face（见 ./index.ts），底层走官方
- * ctx.uiWorkspace 导航服务与 ctx.get('sessions') 内容检索。
+ * ctx.uiWorkspace 导航服务、ctx.get('sessions') 内容检索与 ctx.get('workspaces') 排序。
  */
 import React from 'react'
 import {
@@ -72,6 +74,9 @@ export interface WorkspaceTreeProps {
   renameSession?: (sessionId: string, title: string) => Promise<void>
   forkSession?: (sessionId: string) => void
   archiveSession?: (sessionId: string) => Promise<void>
+  /** 会话置顶 / 取消置顶：复用官方 UiWorkspaceService，存储落在 Host。 */
+  pinSession?: (sessionId: string) => Promise<void>
+  unpinSession?: (sessionId: string) => Promise<void>
   /** 工作区排序：把 workspaceId 移到 beforeWorkspaceId 之前；省略表示移到末尾。 */
   insertWorkspaceBefore?: (workspaceId: string, beforeWorkspaceId?: string) => Promise<void>
   t?: (key: string) => string
@@ -94,7 +99,7 @@ interface SearchRow {
 }
 
 export function WorkspaceTree(props: WorkspaceTreeProps) {
-  const { useSessions, useWorkspaces, open, startSession, searchSessions, renameSession, forkSession, archiveSession, insertWorkspaceBefore } = props
+  const { useSessions, useWorkspaces, open, startSession, searchSessions, renameSession, forkSession, archiveSession, pinSession, unpinSession, insertWorkspaceBefore } = props
   const [, force] = React.useReducer((n: number) => n + 1, 0)
   React.useEffect(() => subscribeVisibility(() => force()), [])
   const [favoritesOnly, setFavoritesOnly] = React.useState(false)
@@ -131,6 +136,13 @@ export function WorkspaceTree(props: WorkspaceTreeProps) {
   const workspaces: readonly WorkspaceViewLike[] = useWorkspaces?.((s) => s.items) ?? []
   const archived: readonly string[] = useWorkspaces?.((s) => s.archivedSessionIds) ?? []
   const archivedSet = new Set(archived)
+  /*
+   * 置顶集合来自官方 Host 快照（WorkspaceSnapshot.pinnedSessionIds，最近置顶在前）。
+   * 本插件只借它做成员判定，展示顺序在置顶区内另行按 updatedAt 降序，不复用官方
+   * 的组内前置顺序，也不写入本地 localStorage。
+   */
+  const pinned: readonly string[] = useWorkspaces?.((s) => s.pinnedSessionIds) ?? []
+  const pinnedSet = new Set(pinned)
 
   // 归档语义优先：已归档会话一律不出现在树里（含收藏视图与检索结果）。
   const visibleSession = React.useCallback(
@@ -141,6 +153,31 @@ export function WorkspaceTree(props: WorkspaceTreeProps) {
     },
     [byId, archivedSet],
   )
+
+  /**
+   * 去重：置顶会话已在全局置顶区显示，其所属分组 / 平铺列表内不再重复出现。
+   * 只在分组与平铺两条渲染路径上过滤，检索结果不过滤（否则置顶会话会从检索里
+   * 消失），故不把该过滤写进 buildGroups / buildFlat。
+   */
+  const withoutPinned = (list: SessionSummaryLike[]): SessionSummaryLike[] =>
+    list.filter((s) => !pinnedSet.has(s.id))
+
+  /**
+   * 全局置顶区成员：直接从快照 pinnedSessionIds 取 id（即使该会话不在当前分组
+   * 视图里也能出现），过 visibleSession 沿用归档 / subagent 排除规则，固定按
+   * updatedAt 降序（不随 orderBy 档位变化）。
+   */
+  const pinnedSessions = (): SessionSummaryLike[] => {
+    const seen = new Set<string>()
+    const rows: SessionSummaryLike[] = []
+    for (const id of pinned) {
+      if (seen.has(id)) continue
+      seen.add(id)
+      const s = visibleSession(id)
+      if (s !== null) rows.push(s)
+    }
+    return rows.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
+  }
 
   const normalizedQuery = query.trim()
 
@@ -324,6 +361,19 @@ export function WorkspaceTree(props: WorkspaceTreeProps) {
     })
   }
 
+  /**
+   * 置顶 / 取消置顶。状态由 Host 快照回推（pinSession 成功后 pinnedSessionIds
+   * 更新触发重渲染），此处只发动作；失败仿照 requestArchive 记警告，不打断列表。
+   */
+  const requestPinToggle = (sessionId: string) => {
+    const isPinned = pinnedSet.has(sessionId)
+    const pending = isPinned ? unpinSession?.(sessionId) : pinSession?.(sessionId)
+    if (pending === undefined) return
+    pending.catch((error: unknown) => {
+      console.warn(isPinned ? 'session unpin rejected:' : 'session pin rejected:', error)
+    })
+  }
+
   // ---- 渲染 ---------------------------------------------------------------
 
   function sessionRow(s: SessionSummaryLike, snippet?: string) {
@@ -440,6 +490,18 @@ export function WorkspaceTree(props: WorkspaceTreeProps) {
           {
             type: 'button',
             className: 'dshsv-btn',
+            title: pinnedSet.has(s.id) ? '取消置顶该会话' : '置顶该会话（跨工作区集中显示）',
+            'aria-label': pinnedSet.has(s.id) ? '取消置顶' : '置顶该会话',
+            'aria-pressed': pinnedSet.has(s.id),
+            onClick: () => requestPinToggle(s.id),
+          },
+          pinnedSet.has(s.id) ? '📌' : '📍',
+        ),
+        React.createElement(
+          'button',
+          {
+            type: 'button',
+            className: 'dshsv-btn',
             title: favorites.has(s.id) ? '取消收藏' : '收藏',
             onClick: () => toggleFavoriteSession(s.id),
           },
@@ -455,6 +517,39 @@ export function WorkspaceTree(props: WorkspaceTreeProps) {
             React.createElement('button', { type: 'button', className: 'dshsv-btn dshsv-btnSm', disabled: renameBusy, onClick: confirmRename }, '确定'),
             React.createElement('button', { type: 'button', className: 'dshsv-btn dshsv-btnSm', disabled: renameBusy, onClick: cancelRename }, '取消'),
           ),
+    )
+  }
+
+  // ---- 全局置顶区 -----------------------------------------------------------
+
+  /**
+   * 全局「置顶（N）」区：跨工作区集中显示置顶会话，位置在 header 之后、工作区
+   * 分组之前，分组模式与平铺模式都渲染。成员来自快照 pinnedSessionIds 与
+   * visibleSession 的交集，因此不受所属分组折叠、隐藏或平铺合并影响 —— 折叠组
+   * 里的置顶会话照样出现；排序固定按 updatedAt 降序。
+   *
+   * 与「仅收藏」的交叉：沿用现有过滤语义，开启「仅收藏」时置顶区同样按收藏过滤，
+   * 标题里的 N 为过滤后实际显示条数。
+   */
+  const pinnedBlock = (): React.ReactElement | null => {
+    const rows = pinnedSessions().filter((s) => !favoritesOnly || favorites.has(s.id))
+    if (rows.length === 0) return null
+    return React.createElement(
+      'div',
+      { className: 'dshsv-pinnedSection', style: { marginBottom: 6 } },
+      React.createElement(
+        'div',
+        { style: { display: 'flex', alignItems: 'center', gap: 4, padding: '2px 8px', fontWeight: 600 } },
+        React.createElement(
+          'span',
+          {
+            style: { flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+            title: '跨工作区集中显示已置顶会话（按最近更新排序）',
+          },
+          `置顶（${rows.length}）`,
+        ),
+      ),
+      React.createElement('div', { className: 'dshsv-rowList' }, rows.map((s) => sessionRow(s))),
     )
   }
 
@@ -509,12 +604,14 @@ export function WorkspaceTree(props: WorkspaceTreeProps) {
     // 折叠与隐藏都收起组内会话；隐藏还会把整组挪到树底折叠区，折叠保留分组位置。
     const expanded = !isHidden && !isCollapsed
     /*
+     * 去重：置顶会话已在全局置顶区显示，组内不再重复（含未分组与已隐藏分组）。
      * 行数用与 sessionRow 同一个「仅收藏」判据独立算出，折叠时就不必先造一遍
      * 元素再丢弃；展开时元素数量与徽标数字一致。
      */
-    const rowCount = g.sessions.filter((s) => !favoritesOnly || favorites.has(s.id)).length
+    const groupSessions = withoutPinned(g.sessions)
+    const rowCount = groupSessions.filter((s) => !favoritesOnly || favorites.has(s.id)).length
     const rows = expanded
-      ? g.sessions.map((s) => sessionRow(s)).filter((row): row is React.ReactElement => row !== null)
+      ? groupSessions.map((s) => sessionRow(s)).filter((row): row is React.ReactElement => row !== null)
       : []
     // 拖拽落点标记：只有真实工作区参与排序，「未分组」伪组既不拖也不作为落点。
     const dropMarker =
@@ -680,6 +777,8 @@ export function WorkspaceTree(props: WorkspaceTreeProps) {
       '.dshsv-btnSm{font-size:10px;line-height:14px;padding:0 5px}' +
       '.dshsv-caret{width:14px;padding:0;font-size:10px;opacity:0.7}' +
       '.dshsv-caret:hover{opacity:1;background:transparent}' +
+      // 全局置顶区：位于分组之前，用底部细线（box-shadow，无引号不占布局）与工作区分组区分。
+      '.dshsv-pinnedSection{box-shadow:0 1px 0 0 rgba(128,128,128,0.25)}' +
       // 运行中标识：标题行左侧的转圈环（与官方 ongoing 像素矩阵语义一致，形态取经典转圈）。
       '.dshsv-spin{width:10px;height:10px;flex:none;box-sizing:border-box;border-radius:50%;border:2px solid rgba(128,128,128,0.3);border-top-color:var(--dsw-alias-state-business-primary,#4c8dff);animation:dshsv-spin .8s linear infinite}' +
       '@keyframes dshsv-spin{to{transform:rotate(360deg)}}' +
@@ -857,10 +956,13 @@ export function WorkspaceTree(props: WorkspaceTreeProps) {
 
   let body: React.ReactElement
   if (groupBy === 'flat') {
-    const flatRows = buildFlat()
+    // 平铺列表去重：置顶会话只在全局置顶区显示，这里过滤掉。
+    const flatRows = withoutPinned(buildFlat())
     body = React.createElement(
       'div',
       null,
+      // 置顶区在 header 之后、会话列表之前；无置顶时 pinnedBlock() 返回 null。
+      pinnedBlock(),
       React.createElement(
         'div',
         { style: { padding: '2px 8px', fontSize: 11, opacity: 0.7 } },
@@ -876,6 +978,7 @@ export function WorkspaceTree(props: WorkspaceTreeProps) {
     body = React.createElement(
       'div',
       null,
+      pinnedBlock(),
       visibleGroups.map((g) => workspaceBlock(g, false)),
       hiddenGroups.length > 0
         ? React.createElement(

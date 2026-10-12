@@ -9,7 +9,8 @@
  *    该席位已被 client-ui-workspace 以默认 priority 0 占用，single 席位在同一
  *    priority 上只允许一个占用者，因此必须换一个 priority 注册；渲染方按
  *    priority 升序取第一个，所以取 -1 才能压过官方。inject face 复用官方
- *    ctx.uiWorkspace 导航服务提供 open / startSession 等动作。
+ *    ctx.uiWorkspace 导航服务提供 open / startSession / archiveSession /
+ *    pinSession 等动作。
  *    本占用者按 treeMode 动态挂载 / 卸载：卸载后官方占用者接管（热切换）。
  * 2. `sidebar.footer.action`（list，scope root）：侧栏页脚的会话列表模式切换
  *    按钮（常驻，与增强树是否渲染无关）。
@@ -86,6 +87,8 @@ interface VisibilityClientContext extends Context {
     startSession: (workspaceId?: string) => void
     forkSession: (sessionId: string) => Promise<void>
     archiveSession: (sessionId: string) => Promise<void>
+    pinSession: (sessionId: string) => Promise<void>
+    unpinSession: (sessionId: string) => Promise<void>
   }
   get?: (name: string) => unknown
   remote?: unknown
@@ -104,6 +107,15 @@ export function apply(ctx: Context) {
       client.uiWorkspace?.forkSession(sessionId).catch(() => {})
     },
     archiveSession: (sessionId: string) => client.uiWorkspace?.archiveSession(sessionId) ?? Promise.resolve(),
+    /*
+     * 置顶 / 取消置顶：官方 UiWorkspaceService.pinSession / unpinSession 的同一
+     * 路径（先写 Host，再把该会话在官方视图存储的保存顺序里前置）。存储复用官方
+     * Host（workspaceRegistry.pinnedSessionIds，经 WorkspaceSnapshot.pinnedSessionIds
+     * 回读），不写 localStorage；本插件的置顶区自行按 updatedAt 排序，不依赖官方
+     * 的组内前置顺序，但保留切回官方列表时的一致性。
+     */
+    pinSession: (sessionId: string) => client.uiWorkspace?.pinSession(sessionId) ?? Promise.resolve(),
+    unpinSession: (sessionId: string) => client.uiWorkspace?.unpinSession(sessionId) ?? Promise.resolve(),
     /*
      * 重命名：与官方 WorkspaceBrowser 的 renameSession 同一路径 ——
      * sessions.binding(id).session.rename(title) 返回 RemoteResult，
