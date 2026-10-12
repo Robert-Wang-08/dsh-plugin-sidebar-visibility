@@ -1,16 +1,19 @@
 /**
- * browser 半入口：注册两个席位占用者。
+ * browser 半入口：注册席位占用者。
  *
  * 复核后确认的注册形状（先例：dsh-client-ui-workspace/lib/client.js apply()）：
  *   ctx.slots.inject('<seat>', () => ctx.slots.register(options, Component))
- *   options = { name, key?, priority?, children?, store?, inject?: () => face, locale? }
+ *   options = { name, key?, priority?, id?, order?, children?, store?, inject?: () => face, locale? }
  *
  * 1. `sidebar.workspaces`（single，scope root）：遮蔽官方 WorkspaceBrowser。
  *    该席位已被 client-ui-workspace 以默认 priority 0 占用，single 席位在同一
  *    priority 上只允许一个占用者，因此必须换一个 priority 注册；渲染方按
  *    priority 升序取第一个，所以取 -1 才能压过官方。inject face 复用官方
  *    ctx.uiWorkspace 导航服务提供 open / startSession 等动作。
- * 2. `settings.models.provider-card`（keyed）：无通配注册，按 settingsNs
+ *    本占用者按 treeMode 动态挂载 / 卸载：卸载后官方占用者接管（热切换）。
+ * 2. `sidebar.footer.action`（list，scope root）：侧栏页脚的会话列表模式切换
+ *    按钮（常驻，与增强树是否渲染无关）。
+ * 3. `settings.models.provider-card`（keyed）：无通配注册，按 settingsNs
  *    逐个 key 注册（先例：dsh-cordis-client-runner 内嵌示例的 key 字段）。
  *    该席位当前无官方占用者（slot 元数据 occupants 为空、keyDomain 标注
  *    "none are taken yet"），故沿用默认 priority。目前覆盖两个内置家族；
@@ -18,7 +21,9 @@
  */
 import type { Context } from '@deepseek-ai/cordis'
 import { ProviderSuspendToggle } from './ProviderSuspendToggle.tsx'
+import { TreeModeToggle } from './TreeModeToggle.tsx'
 import { WorkspaceTree } from './WorkspaceTree.tsx'
+import { getVisibility, subscribeVisibility, toggleTreeMode } from './visibility-store.ts'
 
 /**
  * cordis 服务注入清单（与官方 client 包的 inject 导出同款）。
@@ -73,7 +78,7 @@ interface WorkspacesFace {
 
 interface VisibilityClientContext extends Context {
   slots: {
-    inject: (seat: string, factory: () => unknown) => void
+    inject: (seat: string, factory: () => unknown) => () => void
     register: (options: Record<string, unknown>, component: unknown) => unknown
   }
   uiWorkspace?: {
@@ -91,42 +96,80 @@ export function apply(ctx: Context) {
   const sessions = client.get?.('sessions') as SessionsFace | undefined
   const workspaces = client.get?.('workspaces') as WorkspacesFace | undefined
 
-  // 工作区树席位：遮蔽官方占用者，动作面走官方导航服务。
-  client.slots.inject('sidebar.workspaces', () =>
+  /** 工作区树占用者的注入面：每次注册都重建（动作面走官方导航服务）。 */
+  const browserFace = () => ({
+    open: (sessionId: string) => client.uiWorkspace?.openSession(sessionId),
+    startSession: (workspaceId?: string) => client.uiWorkspace?.startSession(workspaceId),
+    forkSession: (sessionId: string) => {
+      client.uiWorkspace?.forkSession(sessionId).catch(() => {})
+    },
+    archiveSession: (sessionId: string) => client.uiWorkspace?.archiveSession(sessionId) ?? Promise.resolve(),
+    /*
+     * 重命名：与官方 WorkspaceBrowser 的 renameSession 同一路径 ——
+     * sessions.binding(id).session.rename(title) 返回 RemoteResult，
+     * 失败时抛出错误消息供调用方就地展示。
+     */
+    renameSession: async (sessionId: string, title: string) => {
+      const session = sessions?.binding(sessionId)?.session
+      if (session === undefined) throw new Error(`unknown session "${sessionId}"`)
+      const result = await session.rename(title)
+      if (!result.ok) throw new Error(result.error.message)
+    },
+    // 内容检索：官方 WorkspaceBrowser 的同一 Host 索引 RPC。
+    searchSessions: (query: string, signal: AbortSignal) => sessions?.search(query, signal),
+    /*
+     * 工作区拖拽排序：官方 browserInjected() 的 insertWorkspaceBefore 走纯
+     * Workspace Controller 的 insertBefore；anchor 省略表示移到末尾。
+     */
+    insertWorkspaceBefore: async (workspaceId: string, beforeWorkspaceId?: string) => {
+      await workspaces?.insertBefore(workspaceId, beforeWorkspaceId)
+    },
+  })
+
+  /*
+   * 工作区树席位：遮蔽官方占用者（priority -1），并支持热切换。
+   * 卸载本占用者后，官方 client-ui-workspace 的 priority 0 占用者立即接管；
+   * 重新注册即恢复增强树。切换由 ./visibility-store.ts 的 treeMode 驱动。
+   */
+  let disposeTree: (() => void) | undefined
+  const mountTree = () => {
+    if (disposeTree !== undefined) return
+    disposeTree = client.slots.inject('sidebar.workspaces', () =>
+      client.slots.register(
+        {
+          name: 'sidebar.workspaces',
+          priority: SHADOW_OFFICIAL_PRIORITY,
+          inject: browserFace,
+        },
+        WorkspaceTree,
+      ),
+    )
+  }
+  const unmountTree = () => {
+    disposeTree?.()
+    disposeTree = undefined
+  }
+  const syncTreeMode = () => {
+    if (getVisibility().treeMode === 'official') unmountTree()
+    else mountTree()
+  }
+
+  syncTreeMode()
+  ctx.effect(() => subscribeVisibility(syncTreeMode), 'sidebar-visibility: tree mode')
+
+  /*
+   * 会话列表模式切换：挂在官方侧栏页脚 action 席位（list），与增强树是否渲染
+   * 无关，因此「原始列表」模式下也能一键切回。见 ./TreeModeToggle.tsx。
+   */
+  client.slots.inject('sidebar.footer.action', () =>
     client.slots.register(
       {
-        name: 'sidebar.workspaces',
-        priority: SHADOW_OFFICIAL_PRIORITY,
-        inject: () => ({
-          open: (sessionId: string) => client.uiWorkspace?.openSession(sessionId),
-          startSession: (workspaceId?: string) => client.uiWorkspace?.startSession(workspaceId),
-          forkSession: (sessionId: string) => {
-            client.uiWorkspace?.forkSession(sessionId).catch(() => {})
-          },
-          archiveSession: (sessionId: string) => client.uiWorkspace?.archiveSession(sessionId) ?? Promise.resolve(),
-          /*
-           * 重命名：与官方 WorkspaceBrowser 的 renameSession 同一路径 ——
-           * sessions.binding(id).session.rename(title) 返回 RemoteResult，
-           * 失败时抛出错误消息供调用方就地展示。
-           */
-          renameSession: async (sessionId: string, title: string) => {
-            const session = sessions?.binding(sessionId)?.session
-            if (session === undefined) throw new Error(`unknown session "${sessionId}"`)
-            const result = await session.rename(title)
-            if (!result.ok) throw new Error(result.error.message)
-          },
-          // 内容检索：官方 WorkspaceBrowser 的同一 Host 索引 RPC。
-          searchSessions: (query: string, signal: AbortSignal) => sessions?.search(query, signal),
-          /*
-           * 工作区拖拽排序：官方 browserInjected() 的 insertWorkspaceBefore 走纯
-           * Workspace Controller 的 insertBefore；anchor 省略表示移到末尾。
-           */
-          insertWorkspaceBefore: async (workspaceId: string, beforeWorkspaceId?: string) => {
-            await workspaces?.insertBefore(workspaceId, beforeWorkspaceId)
-          },
-        }),
+        name: 'sidebar.footer.action',
+        id: 'sidebar-visibility-tree-mode',
+        order: 100,
+        inject: () => ({ toggleMode: toggleTreeMode, getMode: () => getVisibility().treeMode }),
       },
-      WorkspaceTree,
+      TreeModeToggle,
     ),
   )
 

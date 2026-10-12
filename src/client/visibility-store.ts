@@ -18,6 +18,13 @@ export type SessionGroupBy = 'workspace' | 'flat'
 /** 会话排序：沿用 Host 顺序，或按最近更新时间降序（官方 view options 的两个档位）。 */
 export type SessionOrderBy = 'manual' | 'updated'
 
+/**
+ * 侧栏会话列表的渲染模式：
+ * - `plugin`：本插件增强树（默认，遮蔽官方 WorkspaceBrowser）。
+ * - `official`：卸载本插件占用者，回落官方 WorkspaceBrowser（一键切换、无需重启）。
+ */
+export type TreeMode = 'plugin' | 'official'
+
 export interface VisibilityPrefs {
   /** 可视化隐藏的工作区（可恢复，与归档无关）。 */
   hiddenWorkspaceIds: string[]
@@ -35,6 +42,8 @@ export interface VisibilityPrefs {
   groupBy: SessionGroupBy
   /** 会话排序档位；默认与官方一致。 */
   orderBy: SessionOrderBy
+  /** 侧栏会话列表模式；默认使用本插件增强树。 */
+  treeMode: TreeMode
 }
 
 export interface ProviderStashEntry {
@@ -59,6 +68,7 @@ const DEFAULTS: VisibilityPrefs = {
   providerStash: {},
   groupBy: 'workspace',
   orderBy: 'updated',
+  treeMode: 'plugin',
 }
 
 function read(): VisibilityPrefs {
@@ -96,6 +106,23 @@ export function setOrderBy(mode: SessionOrderBy) {
   const prefs = read()
   prefs.orderBy = mode
   write(prefs)
+}
+
+/**
+ * 设置侧栏会话列表模式。
+ *
+ * 只写偏好 + 通知订阅者；占用者的挂载 / 卸载由 client/index.ts 的订阅回调
+ * 统一处理（同一 localStorage 键，刷新后保持）。
+ */
+export function setTreeMode(mode: TreeMode) {
+  const prefs = read()
+  prefs.treeMode = mode
+  write(prefs)
+}
+
+/** 在插件树与官方树之间一键切换。 */
+export function toggleTreeMode() {
+  setTreeMode(read().treeMode === 'plugin' ? 'official' : 'plugin')
 }
 
 export function toggleHiddenWorkspace(workspaceId: string) {

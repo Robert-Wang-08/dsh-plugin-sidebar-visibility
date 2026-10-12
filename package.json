@@ -1,7 +1,7 @@
 {
   "name": "@local/dsh-plugin-sidebar-visibility",
   "description": "DSH Web 增强插件：工作区可视化隐藏、会话收藏与仅收藏筛选、Provider 挂起/恢复（保留配置）",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "private": true,
   "type": "module",
   "main": "lib/index.js",

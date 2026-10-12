@@ -46,6 +46,7 @@ interface SessionSummaryLike {
   cwd?: string
   origin?: string
   blank?: boolean
+  running?: boolean
   updatedAt?: number
 }
 
@@ -372,10 +373,18 @@ export function WorkspaceTree(props: WorkspaceTreeProps) {
           cursor: 'pointer',
         },
       },
-      // 第一行：标题占满宽度，收藏常显在右端。
+      // 第一行：运行中转圈标识 + 标题占满宽度，收藏常显在右端。
       React.createElement(
         'div',
         { style: { display: 'flex', alignItems: 'center', gap: 4 } },
+        s.running === true
+          ? React.createElement('span', {
+              className: 'dshsv-spin',
+              role: 'img',
+              'aria-label': '进行中',
+              title: '该会话正在运行',
+            })
+          : null,
         React.createElement(
           'span',
           { style: { flex: 1, minWidth: 0 } },
@@ -671,6 +680,9 @@ export function WorkspaceTree(props: WorkspaceTreeProps) {
       '.dshsv-btnSm{font-size:10px;line-height:14px;padding:0 5px}' +
       '.dshsv-caret{width:14px;padding:0;font-size:10px;opacity:0.7}' +
       '.dshsv-caret:hover{opacity:1;background:transparent}' +
+      // 运行中标识：标题行左侧的转圈环（与官方 ongoing 像素矩阵语义一致，形态取经典转圈）。
+      '.dshsv-spin{width:10px;height:10px;flex:none;box-sizing:border-box;border-radius:50%;border:2px solid rgba(128,128,128,0.3);border-top-color:var(--dsw-alias-state-business-primary,#4c8dff);animation:dshsv-spin .8s linear infinite}' +
+      '@keyframes dshsv-spin{to{transform:rotate(360deg)}}' +
       '.dshsv-rowActions{display:none;flex-direction:row;align-items:center;gap:4px;margin-top:2px}' +
       '.dshsv-sessionRow:hover .dshsv-rowActions{display:flex}' +
       '.dshsv-rowActions .dshsv-btn{text-align:center;flex:none}' +
