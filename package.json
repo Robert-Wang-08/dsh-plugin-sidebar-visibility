@@ -54,6 +54,7 @@
   ],
   "scripts": {
     "bundle": "tsdown && node scripts/finalize-client-bundle.mjs",
+    "prepare": "pnpm run bundle",
     "verify": "node scripts/finalize-client-bundle.mjs",
     "watch": "tsdown --watch"
   }
