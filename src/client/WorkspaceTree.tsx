@@ -41,6 +41,9 @@ import {
   toggleCollapsedWorkspace,
   toggleFavoriteSession,
   toggleHiddenWorkspace,
+  markSessionRead,
+  markSessionUnread,
+  pruneUnreadSessions,
   type SessionGroupBy,
   type SessionOrderBy,
 } from './visibility-store.ts'
@@ -158,9 +161,38 @@ export function WorkspaceTree(props: WorkspaceTreeProps) {
   }
   const sessionIds: readonly string[] = useSessions?.((s) => s.ids) ?? []
   const current: string | undefined = useSessions?.((s) => s.current)
+  const unread = new Set(prefs.unreadSessionIds)
   const workspaces: readonly WorkspaceViewLike[] = useWorkspaces?.((s) => s.items) ?? []
   const archived: readonly string[] = useWorkspaces?.((s) => s.archivedSessionIds) ?? []
   const archivedSet = new Set(archived)
+
+  // ---- 已完成未读 -----------------------------------------------------------
+  /*
+   * 只认浏览器自己观察到的「跑完」：上一帧 running=true、这一帧 running=false。
+   * 列表快照没有运行完成时刻，用 updatedAt 猜会给所有旧会话造成假未读，所以不猜。
+   * 正在看的会话跑完不算未读（current 命中直接标读）。
+   */
+  const prevRunning = React.useRef<Record<string, boolean>>({})
+  React.useEffect(() => {
+    const previous = prevRunning.current
+    const next: Record<string, boolean> = {}
+    for (const [id, row] of Object.entries(byId)) {
+      const running = row?.running === true
+      next[id] = running
+      if (previous[id] === true && !running) {
+        if (id === current) markSessionRead(id)
+        else markSessionUnread(id)
+      }
+    }
+    prevRunning.current = next
+    // 归档 / 删除后的 id 从集合里清掉，避免无限增长。
+    pruneUnreadSessions(Object.keys(byId))
+  }, [byId, current])
+
+  /** 打开某会话即视为已读（current 是唯一事实源，不依赖点击回调）。 */
+  React.useEffect(() => {
+    if (current !== undefined) markSessionRead(current)
+  }, [current])
   /*
    * 置顶集合来自官方 Host 快照（WorkspaceSnapshot.pinnedSessionIds，最近置顶在前）。
    * 本插件只借它做成员判定，展示顺序在置顶区内另行按 updatedAt 降序，不复用官方
@@ -466,7 +498,7 @@ export function WorkspaceTree(props: WorkspaceTreeProps) {
           cursor: 'pointer',
         },
       },
-      // 第一行：运行中转圈标识 + 标题占满宽度，收藏常显在右端。
+      // 第一行：运行中转圈标识 + 标题占满宽度，未读亮点与收藏常显在右端。
       React.createElement(
         'div',
         { style: { display: 'flex', alignItems: 'center', gap: 4 } },
@@ -523,6 +555,14 @@ export function WorkspaceTree(props: WorkspaceTreeProps) {
             ? React.createElement('span', { style: { display: 'block', fontSize: 10, opacity: 0.8 } }, renameError)
             : null,
         ),
+        unread.has(s.id)
+          ? React.createElement('span', {
+              className: 'dshsv-unread',
+              role: 'img',
+              'aria-label': '未读',
+              title: '该会话已完成，尚未查看',
+            })
+          : null,
         React.createElement(
           'button',
           {
@@ -836,6 +876,8 @@ export function WorkspaceTree(props: WorkspaceTreeProps) {
       '.dshsv-ancestorRow{color:var(--dsw-alias-state-business-primary,#4c8dff)}' +
       // 全局置顶区：位于分组之前，用底部细线（box-shadow，无引号不占布局）与工作区分组区分。
       '.dshsv-pinnedSection{box-shadow:0 1px 0 0 rgba(128,128,128,0.25)}' +
+      // 已完成未读亮点：行尾小圆点（主色 + 同色柔光），不占行高、不挤标题。
+      '.dshsv-unread{width:6px;height:6px;flex:none;border-radius:50%;background:var(--dsw-alias-state-business-primary,#4c8dff);box-shadow:0 0 0 3px rgba(76,141,255,0.18)}' +
       // 运行中标识：标题行左侧的转圈环（与官方 ongoing 像素矩阵语义一致，形态取经典转圈）。
       '.dshsv-spin{width:10px;height:10px;flex:none;box-sizing:border-box;border-radius:50%;border:2px solid rgba(128,128,128,0.3);border-top-color:var(--dsw-alias-state-business-primary,#4c8dff);animation:dshsv-spin .8s linear infinite}' +
       '@keyframes dshsv-spin{to{transform:rotate(360deg)}}' +

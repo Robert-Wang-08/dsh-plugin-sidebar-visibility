@@ -50,6 +50,14 @@ export interface VisibilityPrefs {
   orderBy: SessionOrderBy
   /** 侧栏会话列表模式；默认使用本插件增强树。 */
   treeMode: TreeMode
+  /**
+   * 「已完成但尚未查看」的会话（行尾亮点）。
+   *
+   * 语义：浏览器观察到 running true→false 时加入；用户打开该会话（current 切到
+   * 它）时移除。纯前端派生，不写 Host；页面关闭期间完成的运行不会被记录 —— 列表
+   * 快照没有「运行完成时刻」，用 updatedAt 猜会产生假未读。
+   */
+  unreadSessionIds: string[]
 }
 
 export interface ProviderStashEntry {
@@ -76,6 +84,7 @@ const DEFAULTS: VisibilityPrefs = {
   groupBy: 'workspace-tree',
   orderBy: 'updated',
   treeMode: 'plugin',
+  unreadSessionIds: [],
 }
 
 const GROUP_BY_VALUES: readonly SessionGroupBy[] = ['workspace-tree', 'workspace', 'flat']
@@ -89,7 +98,10 @@ function read(): VisibilityPrefs {
       const groupBy = GROUP_BY_VALUES.includes(parsed.groupBy as SessionGroupBy)
         ? (parsed.groupBy as SessionGroupBy)
         : undefined
-      return { ...DEFAULTS, ...parsed, ...(groupBy === undefined ? {} : { groupBy }) }
+      const unread = Array.isArray(parsed.unreadSessionIds)
+        ? parsed.unreadSessionIds.filter((id): id is string => typeof id === 'string' && id.length > 0)
+        : DEFAULTS.unreadSessionIds
+      return { ...DEFAULTS, ...parsed, unreadSessionIds: unread, ...(groupBy === undefined ? {} : { groupBy }) }
     }
   } catch { /* 损坏时回落默认 */ }
   return { ...DEFAULTS }
@@ -174,6 +186,49 @@ export function setCollapsedWorkspaces(workspaceIds: string[]) {
   const prefs = read()
   prefs.collapsedWorkspaceIds = [...workspaceIds]
   write(prefs)
+}
+
+/**
+ * 标记会话「已完成未读」：同一 id 幂等，写一次就通知订阅者。
+ * 只在 running 由 true 变 false 且不是当前会话时调用。
+ */
+export function markSessionUnread(sessionId: string) {
+  const prefs = read()
+  if (prefs.unreadSessionIds.includes(sessionId)) return
+  prefs.unreadSessionIds = [...prefs.unreadSessionIds, sessionId]
+  write(prefs)
+}
+
+/** 标记会话已读：从集合中移除；不在集合里时不写、不触发重渲染。 */
+export function markSessionRead(sessionId: string) {
+  const prefs = read()
+  if (!prefs.unreadSessionIds.includes(sessionId)) return
+  prefs.unreadSessionIds = prefs.unreadSessionIds.filter((id) => id !== sessionId)
+  write(prefs)
+}
+
+/** 批量标记已读（打开工作区时用），只写一次。 */
+export function markSessionsRead(sessionIds: readonly string[]) {
+  const prefs = read()
+  const drop = new Set(sessionIds)
+  const next = prefs.unreadSessionIds.filter((id) => !drop.has(id))
+  if (next.length === prefs.unreadSessionIds.length) return
+  prefs.unreadSessionIds = next
+  write(prefs)
+}
+
+/** 清理已不存在（归档 / 删除）的未读 id，避免集合无限增长。 */
+export function pruneUnreadSessions(existingSessionIds: readonly string[]) {
+  const prefs = read()
+  const keep = new Set(existingSessionIds)
+  const next = prefs.unreadSessionIds.filter((id) => keep.has(id))
+  if (next.length === prefs.unreadSessionIds.length) return
+  prefs.unreadSessionIds = next
+  write(prefs)
+}
+
+export function isSessionUnread(sessionId: string): boolean {
+  return read().unreadSessionIds.includes(sessionId)
 }
 
 export function toggleFavoriteSession(sessionId: string) {
