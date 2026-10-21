@@ -7,14 +7,18 @@
  *
  * 能力对齐：遮蔽意味着官方浏览器整体不再渲染，因此官方原有的三项视图能力
  * 必须在本组件内等价提供，否则会被静默丢失：
- *   1. 分组模式 groupBy：`workspace`（按工作区分段）| `flat`（合并为一个列表）
+ *   1. 分组模式 groupBy：`workspace-tree`（按目录嵌套，本插件新增，新用户默认）
+ *      | `workspace`（按工作区分段）| `flat`（合并为一个列表）
  *   2. 排序 orderBy：`manual`（沿用 Host 顺序）| `updated`（按最近更新降序）
  *   3. 查找：本地标题 / 路径 / 工作区名匹配 + Host 消息内容索引检索
  * 官方把 deriveGroups / deriveFlat / ViewOptionsMenu / createWorkspaceViewStore
  * 全部留在包内（`./client` 只导出类型与 apply/inject），无法复用，故按官方语义
  * 本地实现，并沿用官方 viewing store 的默认值（workspace + updated）。
  *
- * 在此之上另有三项本插件自有能力：
+ * 在此之上另有四项本插件自有能力：
+ *   - 目录树视图（workspace-tree）：按已登记规范化路径的最近严格祖先自动嵌套
+ *     （纯函数见 ./workspace-hierarchy.ts），12px/层缩进；折叠收起整棵子树，隐藏
+ *     时子区提升到最近可见祖先；同级拖拽重排、跨级一律拒绝（不改父子目录）。
  *   - 工作区隐藏 / 收藏会话 / 仅收藏（见 ./visibility-store.ts）
  *   - 会话置顶：跨工作区的全局「置顶（N）」区，复用官方 Host 置顶存储
  *     （WorkspaceSnapshot.pinnedSessionIds），区外分组不再重复显示
@@ -40,6 +44,15 @@ import {
   type SessionGroupBy,
   type SessionOrderBy,
 } from './visibility-store.ts'
+import {
+  ancestorKeys,
+  buildWorkspaceHierarchy,
+  promotePastHidden,
+  siblingReorderAnchor,
+  visibleTreeNodes,
+  type TreeNode,
+} from './workspace-hierarchy.ts'
+import { RunningIndicator } from './runtime-indicator.tsx'
 
 interface SessionSummaryLike {
   id: string
@@ -143,6 +156,24 @@ export function WorkspaceTree(props: WorkspaceTreeProps) {
    */
   const pinned: readonly string[] = useWorkspaces?.((s) => s.pinnedSessionIds) ?? []
   const pinnedSet = new Set(pinned)
+
+  /*
+   * 目录树层级（仅 workspace-tree 模式派生）：父子关系来自已登记规范化路径的
+   * 最近严格祖先（./workspace-hierarchy.ts），拖拽的兼容判定与同级锚点也用它。
+   * promotedParents 把隐藏工作区的子区提升到最近可见祖先，避免数据失踪。
+   */
+  const treeHierarchy = groupBy === 'workspace-tree' ? buildWorkspaceHierarchy(workspaces) : null
+  const promotedParents = treeHierarchy === null ? null : promotePastHidden(treeHierarchy.parents, hidden)
+  /*
+   * 当前会话所在工作区及其祖先链（workspace-tree 模式）：直接所在组与祖先组
+   * 的标题都会点亮（对齐官方 currentAncestors 的 containsCurrentDescendant）。
+   */
+  const currentGroupKey =
+    treeHierarchy === null || current === undefined
+      ? undefined
+      : workspaces.find((w) => (w.sessionIds ?? []).includes(current))?.workspaceId
+  const currentAncestors =
+    treeHierarchy === null ? new Set<string>() : ancestorKeys(treeHierarchy.parents, currentGroupKey)
 
   // 归档语义优先：已归档会话一律不出现在树里（含收藏视图与检索结果）。
   const visibleSession = React.useCallback(
@@ -428,12 +459,7 @@ export function WorkspaceTree(props: WorkspaceTreeProps) {
         'div',
         { style: { display: 'flex', alignItems: 'center', gap: 4 } },
         s.running === true
-          ? React.createElement('span', {
-              className: 'dshsv-spin',
-              role: 'img',
-              'aria-label': '进行中',
-              title: '该会话正在运行',
-            })
+          ? React.createElement(RunningIndicator, { sessionId: s.id, running: true })
           : null,
         React.createElement(
           'span',
@@ -572,6 +598,19 @@ export function WorkspaceTree(props: WorkspaceTreeProps) {
     if (workspaceDropCommitted.current) return
     workspaceDropCommitted.current = true
     setWorkspaceDrag(null)
+    if (groupBy === 'workspace-tree') {
+      // 树模式：同级重排走纯函数——同父才可动，跨级 reject，绝不改父子目录。
+      if (treeHierarchy === null) return
+      const outcome = siblingReorderAnchor(workspaces, treeHierarchy.parents, activeDrag.workspaceId, over.id, over.half)
+      if (outcome.kind === 'move') {
+        insertWorkspaceBefore?.(activeDrag.workspaceId, outcome.anchor).catch((reason: unknown) => {
+          console.warn('workspace reorder rejected:', reason)
+        })
+      } else if (outcome.kind === 'reject') {
+        console.warn('workspace reorder rejected:', outcome.reason)
+      }
+      return
+    }
     const rowIndex = workspaces.findIndex((w) => w.workspaceId === over.id)
     if (rowIndex === -1) return
     const anchor = over.half === 'before' ? over.id : workspaces[rowIndex + 1]?.workspaceId
@@ -722,11 +761,11 @@ export function WorkspaceTree(props: WorkspaceTreeProps) {
     )
   }
 
-  const selectStyle: React.CSSProperties = { fontSize: 11, maxWidth: 108 }
+  const selectStyle = { fontSize: 'calc(11px + var(--dsh-content-font-delta, 0px))', maxWidth: 108 }
   const searchInputStyle: React.CSSProperties = {
     flex: 1,
     minWidth: 0,
-    fontSize: 12,
+    fontSize: 'calc(12px + var(--dsh-content-font-delta, 0px))',
     padding: '2px 6px',
     boxSizing: 'border-box',
   }
@@ -771,28 +810,35 @@ export function WorkspaceTree(props: WorkspaceTreeProps) {
   const styleTag = React.createElement(
     'style',
     null,
-    '.dshsv-btn{font-size:11px;line-height:16px;padding:1px 6px;border:none;background:transparent;color:inherit;border-radius:4px;cursor:pointer;flex:none;font-family:inherit}' +
+    '.dshsv-btn{font-size:11px;line-height:16px;padding:1px 6px;border:none;background:transparent;color:inherit;border-radius:var(--dsw-radius-sm,4px);cursor:pointer;flex:none;font-family:inherit}' +
       '.dshsv-btn:hover{background:rgba(128,128,128,0.22)}' +
       '.dshsv-btn:disabled{opacity:0.5;cursor:default;background:transparent}' +
       '.dshsv-btnSm{font-size:10px;line-height:14px;padding:0 5px}' +
       '.dshsv-caret{width:14px;padding:0;font-size:10px;opacity:0.7}' +
       '.dshsv-caret:hover{opacity:1;background:transparent}' +
+      // 目录树组头：rc.2 主题 token 圆角与悬停底色；文件夹轮廓图标用三线灰阶。
+      '.dshsv-wsHeader{border-radius:var(--dsw-radius-md,6px)}' +
+      '.dshsv-wsHeader:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(128,128,128,0.12))}' +
+      '.dshsv-folderIcon{display:inline-flex;flex:none;color:var(--dsw-alias-label-tertiary,#9a9a9a)}' +
+      // 当前会话所在组及其祖先链：标题点亮主色（官方 containsCurrentDescendant 语义）。
+      '.dshsv-ancestorRow{color:var(--dsw-alias-state-business-primary,#4c8dff)}' +
       // 全局置顶区：位于分组之前，用底部细线（box-shadow，无引号不占布局）与工作区分组区分。
       '.dshsv-pinnedSection{box-shadow:0 1px 0 0 rgba(128,128,128,0.25)}' +
       // 运行中标识：标题行左侧的转圈环（与官方 ongoing 像素矩阵语义一致，形态取经典转圈）。
       '.dshsv-spin{width:10px;height:10px;flex:none;box-sizing:border-box;border-radius:50%;border:2px solid rgba(128,128,128,0.3);border-top-color:var(--dsw-alias-state-business-primary,#4c8dff);animation:dshsv-spin .8s linear infinite}' +
       '@keyframes dshsv-spin{to{transform:rotate(360deg)}}' +
+      '.dshsv-run{display:inline-flex;align-items:center;gap:4px;flex:none;max-width:104px;min-width:0;overflow:hidden;font-size:10px;line-height:14px}.dshsv-runBadge{flex:none;padding:0 4px;border-radius:var(--dsw-radius-sm,4px);font-size:9px;line-height:13px;font-weight:600;letter-spacing:0}.dshsv-runTime{flex:none;opacity:0.75;font-variant-numeric:tabular-nums}' +
       '.dshsv-rowActions{display:none;flex-direction:row;align-items:center;gap:4px;margin-top:2px}' +
       '.dshsv-sessionRow:hover .dshsv-rowActions{display:flex}' +
       '.dshsv-rowActions .dshsv-btn{text-align:center;flex:none}' +
       // 隔行设色（最低层）：行列表的直接子元素按序数取色，组头 / 计数行不在列表内。
       '.dshsv-rowList > :nth-child(even){background:rgba(128,128,128,0.08)}' +
       // 行内边距走样式段，悬停才能改 padding 做抬升；内联只留布局。
-      '.dshsv-sessionRow{padding:4px 8px;transition:background .1s ease,padding .1s ease}' +
+      '.dshsv-sessionRow{padding:4px 8px;padding-inline-start:calc(8px + var(--dsh-workspace-indent,0px));transition:background .1s ease,padding .1s ease}' +
       // 当前会话（中间层）：内联底色已移除，靠类名与斑马纹分层。
       '.dshsv-sessionRow.dshsv-currentRow{background:rgba(128,128,128,0.15)}' +
       // 悬停（最高层）：加内边距放大命中区做出抬升感；横排单行动作使行高有界。
-      '.dshsv-sessionRow:hover{background:rgba(128,128,128,0.25);padding:7px 8px}' +
+      '.dshsv-sessionRow:hover{background:rgba(128,128,128,0.25);padding-block:7px;padding-inline-end:8px;padding-inline-start:calc(8px + var(--dsh-workspace-indent,0px))}' +
       /*
        * 工作区拖拽落点：用 box-shadow 画 2px 主色线。
        * 不用 ::before/::after + content：React 会把引号转义成实体，而 <style>
@@ -810,11 +856,219 @@ export function WorkspaceTree(props: WorkspaceTreeProps) {
   const visibleGroups = groups.filter((g) => g.workspace === null || !hidden.has(g.key))
   const hiddenGroups = groups.filter((g) => g.workspace !== null && hidden.has(g.key))
 
+  // ---- 目录树视图（workspace-tree）-----------------------------------------
+
+  const groupsByKey = new Map(groups.map((g) => [g.key, g]))
+  const treeNodes =
+    treeHierarchy !== null && promotedParents !== null
+      ? visibleTreeNodes(treeHierarchy, promotedParents, hidden, collapsed)
+      : []
+
+  /** rc.2 文件夹轮廓图标：stroke 用 currentColor，随组头文字基线对齐。 */
+  const folderGlyph = () =>
+    React.createElement(
+      'svg',
+      {
+        className: 'dshsv-folderIcon',
+        width: 14,
+        height: 14,
+        viewBox: '0 0 24 24',
+        fill: 'none',
+        stroke: 'currentColor',
+        strokeWidth: 1.6,
+        strokeLinecap: 'round',
+        strokeLinejoin: 'round',
+        'aria-hidden': true,
+      },
+      React.createElement('path', {
+        d: 'M3 7a2 2 0 0 1 2-2h4.6a2 2 0 0 1 1.5.7L12.6 7H19a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z',
+      }),
+    )
+
+  /**
+   * 目录树节点渲染：组头（文件夹轮廓 + 折叠箭头 + 标题）→ 子组（递归）→ 本组
+   * 会话行（官方 rc.2 同序，lib/client.js:2447-2544）。缩进沿用官方变量名
+   * --dsh-workspace-indent（12px × 深度），组头与会话行各自读取；每个分组自带
+   * 独立的 .dshsv-rowList，子组行不落进父组列表（斑马纹按列表内序数取色，隔离）。
+   * 「未分组」伪组没有 workspace：不拖拽、不可作为落点、无隐藏 / 新建按钮。
+   */
+  function renderTreeGroup(node: TreeNode, depth: number): React.ReactElement | null {
+    const g = groupsByKey.get(node.workspace.workspaceId)
+    if (g === undefined) return null
+    const isPseudo = g.workspace === null
+    const isCollapsed = collapsed.has(g.key)
+    const groupSessions = withoutPinned(g.sessions)
+    const rowCount = groupSessions.filter((s) => !favoritesOnly || favorites.has(s.id)).length
+    const rows = isCollapsed
+      ? []
+      : (groupSessions.map((s) => sessionRow(s)).filter((row): row is React.ReactElement => row !== null))
+    const isCurrentLineage = currentAncestors.has(g.key) || currentGroupKey === g.key
+    const dropMarker = workspaceDrag !== null && workspaceDrag.over?.id === g.key ? workspaceDrag.over.half : null
+    /*
+     * 同级兼容判定：仅当被拖工作区与本组在树里同父（含同为根）时才可悬停 / 落下，
+     * 从源头禁止跨级排序。非兼容且本组有父级时不拦截事件，让冒泡交给（可能兼容
+     * 的）祖先组处理；一旦处理就必须 stopPropagation，防止祖先重复悬停 / 重复提交。
+     */
+    const compatibleDrag =
+      !isPseudo &&
+      workspaceDrag !== null &&
+      treeHierarchy !== null &&
+      treeHierarchy.parents.get(workspaceDrag.workspaceId) === treeHierarchy.parents.get(g.key)
+    const hasParent = treeHierarchy !== null && treeHierarchy.parents.get(g.key) !== undefined
+    const acceptsDrop = !isPseudo && workspaceDrag !== null
+    return React.createElement(
+      'div',
+      {
+        key: g.key,
+        className:
+          dropMarker === 'before' ? 'dshsv-dropBefore' : dropMarker === 'after' ? 'dshsv-dropAfter' : undefined,
+        style: { marginBottom: 6, ['--dsh-workspace-indent']: String(depth * 12) + 'px' } as React.CSSProperties,
+        onDragOver: acceptsDrop
+          ? (e: React.DragEvent<HTMLElement>) => {
+              e.preventDefault()
+              if (!compatibleDrag && hasParent) return
+              e.stopPropagation()
+              if (compatibleDrag) {
+                e.dataTransfer.dropEffect = 'move'
+                hoverWorkspace(g.key, workspaceHalfOf(e))
+              } else {
+                e.dataTransfer.dropEffect = 'none'
+                setWorkspaceDrag((active) =>
+                  active === null || active.over === null ? active : { ...active, over: null },
+                )
+              }
+            }
+          : undefined,
+        onDrop: acceptsDrop
+          ? (e: React.DragEvent<HTMLElement>) => {
+              e.preventDefault()
+              if (!compatibleDrag && hasParent) return
+              e.stopPropagation()
+              if (compatibleDrag && workspaceDrag !== null) {
+                commitWorkspaceDrag(workspaceDrag, { id: g.key, half: workspaceHalfOf(e) })
+              } else {
+                workspaceDropCommitted.current = true
+                setWorkspaceDrag(null)
+              }
+            }
+          : undefined,
+      },
+      React.createElement(
+        'div',
+        {
+          draggable: !isPseudo,
+          onDragStart: isPseudo
+            ? undefined
+            : (e: React.DragEvent<HTMLElement>) => {
+                e.dataTransfer.effectAllowed = 'move'
+                e.dataTransfer.setData('text/plain', g.key)
+                startWorkspaceDrag(g.key)
+              },
+          onDragEnd: isPseudo ? undefined : endWorkspaceDrag,
+          className: 'dshsv-wsHeader',
+          style: {
+            display: 'flex',
+            alignItems: 'center',
+            gap: 4,
+            padding: '2px 8px',
+            paddingInlineStart: 'calc(8px + var(--dsh-workspace-indent, 0px))',
+            fontWeight: 600,
+          },
+        },
+        isPseudo ? null : folderGlyph(),
+        isPseudo
+          ? null
+          : React.createElement(
+              'button',
+              {
+                type: 'button',
+                className: 'dshsv-btn dshsv-caret',
+                'aria-expanded': !isCollapsed,
+                'aria-label': (isCollapsed ? '展开' : '折叠') + '工作区 ' + g.title,
+                title: isCollapsed ? '展开该工作区（含子工作区）' : '折叠该工作区（收起整棵子树）',
+                onClick: () => toggleCollapsedWorkspace(g.key),
+              },
+              isCollapsed ? '▸' : '▾',
+            ),
+        React.createElement(
+          'span',
+          {
+            className: isCurrentLineage ? 'dshsv-ancestorRow' : undefined,
+            style: {
+              flex: 1,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+              cursor: 'pointer',
+              fontSize: 'calc(12px + var(--dsh-content-font-delta, 0px))',
+            },
+            title: g.workspace?.path ?? g.title,
+            onClick: () => toggleCollapsedWorkspace(g.key),
+          },
+          g.title,
+        ),
+        isCollapsed && rowCount > 0
+          ? React.createElement('span', { style: { fontSize: 10, opacity: 0.6 } }, String(rowCount))
+          : null,
+        isPseudo
+          ? null
+          : React.createElement(
+              'button',
+              {
+                type: 'button',
+                className: 'dshsv-btn',
+                title: '隐藏该工作区（可恢复，会话数据不受影响；子工作区自动上提）',
+                onClick: () => toggleHiddenWorkspace(g.key),
+              },
+              '隐藏',
+            ),
+        isPseudo
+          ? null
+          : React.createElement(
+              'button',
+              {
+                type: 'button',
+                className: 'dshsv-btn',
+                'aria-label': '在“' + g.title + '”中新建会话',
+                title: '在“' + g.title + '”中新建会话',
+                onClick: () => {
+                  if (isCollapsed) toggleCollapsedWorkspace(g.key)
+                  startSession?.(g.key)
+                },
+              },
+              '+',
+            ),
+      ),
+      !isCollapsed && node.children.length > 0
+        ? React.createElement('div', { role: 'group' }, node.children.map((c) => renderTreeGroup(c, depth + 1)))
+        : null,
+      !isCollapsed && rows.length > 0 ? React.createElement('div', { className: 'dshsv-rowList' }, rows) : null,
+    )
+  }
+
+  /** 目录树模式「已隐藏的工作区」折叠区的一行：仅保留恢复入口，无拖拽。 */
+  const hiddenTreeRow = (g: Group) =>
+    React.createElement(
+      'div',
+      { key: g.key, style: { display: 'flex', alignItems: 'center', gap: 4, padding: '2px 8px' } },
+      folderGlyph(),
+      React.createElement(
+        'span',
+        { style: { flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, title: g.workspace?.path ?? g.title },
+        g.title,
+      ),
+      React.createElement(
+        'button',
+        { type: 'button', className: 'dshsv-btn', title: '恢复显示该工作区', onClick: () => toggleHiddenWorkspace(g.key) },
+        '恢复',
+      ),
+    )
+
   /*
    * 可折叠范围 = 当前可见分组（含「未分组」），仅分组模式适用。已隐藏的分组
    * 没有折叠箭头，不参与全折叠，其折叠态也原样保留。
    */
-  const collapsibleKeys = groupBy === 'workspace' ? visibleGroups.map((g) => g.key) : []
+  const collapsibleKeys = groupBy !== 'flat' ? visibleGroups.map((g) => g.key) : []
   const allCollapsed = collapsibleKeys.length > 0 && collapsibleKeys.every((key) => collapsed.has(key))
 
   /** 全折叠 / 全展开：一次覆盖写入，只作用于当前可折叠范围。 */
@@ -864,6 +1118,7 @@ export function WorkspaceTree(props: WorkspaceTreeProps) {
             style: selectStyle,
             onChange: (e: React.ChangeEvent<HTMLSelectElement>) => setGroupBy(e.target.value as SessionGroupBy),
           },
+          React.createElement('option', { value: 'workspace-tree' }, '按目录树'),
           React.createElement('option', { value: 'workspace' }, '按工作区'),
           React.createElement('option', { value: 'flat' }, '一个列表'),
         ),
@@ -973,6 +1228,30 @@ export function WorkspaceTree(props: WorkspaceTreeProps) {
         { className: 'dshsv-rowList' },
         flatRows.map((s) => sessionRow(s)),
       ),
+    )
+  } else if (groupBy === 'workspace-tree') {
+    /*
+     * 目录树：可见节点由 workspace-hierarchy 派生（隐藏已提升、折叠已剪枝），
+     * 未分组伪组作为根追加在最后；置顶区仍是最外层且组内不重复。已隐藏的工作区
+     * 收进底部折叠区，只留恢复入口，不占树位。
+     */
+    const ungroupedGroup = groupsByKey.get('__ungrouped__')
+    body = React.createElement(
+      'div',
+      null,
+      pinnedBlock(),
+      treeNodes.map((n) => renderTreeGroup(n, 0)),
+      ungroupedGroup !== undefined
+        ? renderTreeGroup({ workspace: { workspaceId: '__ungrouped__' }, depth: 0, children: [] }, 0)
+        : null,
+      hiddenGroups.length > 0
+        ? React.createElement(
+            'details',
+            { style: { marginTop: 8, padding: '0 8px', opacity: 0.75 } },
+            React.createElement('summary', null, `已隐藏的工作区（${hiddenGroups.length}）`),
+            hiddenGroups.map((g) => hiddenTreeRow(g)),
+          )
+        : null,
     )
   } else {
     body = React.createElement(

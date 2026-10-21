@@ -12,8 +12,14 @@
 
 const STORAGE_KEY = 'dsh.sidebar-visibility.v1'
 
-/** 会话列表分组模式：按工作区分段，或合并为一个列表（官方 "In one list"）。 */
-export type SessionGroupBy = 'workspace' | 'flat'
+/**
+ * 会话列表分组模式：
+ * - 'workspace-tree'：按规范化目录的最近严格祖先嵌套（本插件新增，新用户默认）；
+ * - 'workspace'：按工作区分段（官方默认）；
+ * - 'flat'：合并为一个列表（官方 "In one list"）。
+ * 旧用户已保存的 workspace / flat 原样保留，不迁移。
+ */
+export type SessionGroupBy = 'workspace-tree' | 'workspace' | 'flat'
 
 /** 会话排序：沿用 Host 顺序，或按最近更新时间降序（官方 view options 的两个档位）。 */
 export type SessionOrderBy = 'manual' | 'updated'
@@ -38,7 +44,7 @@ export interface VisibilityPrefs {
    * 按 Provider 分开暂存才不会互相覆盖。
    */
   providerStash: Record<string, ProviderStashEntry>
-  /** 会话列表分组模式；默认与官方一致。 */
+  /** 会话列表分组模式；新用户默认目录树，旧保存值原样保留。 */
   groupBy: SessionGroupBy
   /** 会话排序档位；默认与官方一致。 */
   orderBy: SessionOrderBy
@@ -66,15 +72,25 @@ const DEFAULTS: VisibilityPrefs = {
   collapsedWorkspaceIds: [],
   favoriteSessionIds: [],
   providerStash: {},
-  groupBy: 'workspace',
+  // 新用户默认目录树；read() 会原样保留旧用户已保存的 workspace / flat。
+  groupBy: 'workspace-tree',
   orderBy: 'updated',
   treeMode: 'plugin',
 }
 
+const GROUP_BY_VALUES: readonly SessionGroupBy[] = ['workspace-tree', 'workspace', 'flat']
+
 function read(): VisibilityPrefs {
   try {
     const raw = globalThis.localStorage?.getItem(STORAGE_KEY)
-    if (raw) return { ...DEFAULTS, ...JSON.parse(raw) }
+    if (raw) {
+      const parsed = JSON.parse(raw) as Partial<VisibilityPrefs>
+      // 未知 groupBy（手改 / 历史实验值）回落默认；旧用户保存的 workspace / flat 原样保留。
+      const groupBy = GROUP_BY_VALUES.includes(parsed.groupBy as SessionGroupBy)
+        ? (parsed.groupBy as SessionGroupBy)
+        : undefined
+      return { ...DEFAULTS, ...parsed, ...(groupBy === undefined ? {} : { groupBy }) }
+    }
   } catch { /* 损坏时回落默认 */ }
   return { ...DEFAULTS }
 }

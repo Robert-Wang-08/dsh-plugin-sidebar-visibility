@@ -1,8 +1,9 @@
 # Dependencies
 node_modules/
 
-# Build output — regenerate with `pnpm run bundle`
-lib/
+# Build output is committed so a plain git pull of a link: install delivers it;
+# regenerate with `pnpm run bundle` before committing source changes.
+lib/*.tsbuildinfo
 
 # Local safety backups
 .bak-*/
