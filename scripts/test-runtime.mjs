@@ -242,4 +242,53 @@ check('snapshot 在状态未变时保持同一对象（uSES 安全）', () => {
   assert.equal(handle.getSnapshot(), handle.getSnapshot())
 })
 
+check('badge 纯色表：未驻留会话也能取到与徽标相同的颜色', () => {
+  const shown = badge.__test.colorPresentationFor('codex-relay', [])
+  assert.equal(shown.color, '#2F6FEB')
+  assert.equal(shown.text, 'a1gpt')
+  assert.match(shown.ink, /^#[0-9A-Fa-f]{3,6}$/)
+})
+
+check('badge 纯色表尊重用户自选色', () => {
+  const values = new Map([['dsh-plugin-provider-badge:colors', JSON.stringify({ 'codex-relay': '#0A0B0C' })]])
+  globalThis.localStorage = {
+    getItem: (key) => (values.has(key) ? values.get(key) : null),
+    setItem: (key, value) => values.set(key, value),
+  }
+  try {
+    assert.equal(badge.__test.colorPresentationFor('codex-relay', []).color, '#0A0B0C')
+  } finally {
+    delete globalThis.localStorage
+  }
+})
+
+check('badge 纯色表对未入表 provider 稳定（同一集合两次一致）', () => {
+  const a = badge.__test.colorPresentationFor('some-provider', ['codex-relay', 'some-provider'])
+  const b = badge.__test.colorPresentationFor('some-provider', ['codex-relay', 'some-provider'])
+  assert.equal(a.color, b.color)
+  assert.equal(a.text, b.text)
+})
+
+check('withSelection：目录缺失时用投影 provider + 纯色表补色', () => {
+  const colorFor = (provider) => badge.__test.colorPresentationFor(provider, [])
+  const composed = bridge.withSelection(null, { provider: 'codex-relay', model: 'gpt-6.1-sol' }, colorFor)
+  assert.notEqual(composed, null)
+  assert.equal(composed.color, '#2F6FEB')
+  assert.equal(composed.text, 'a1gpt')
+  assert.equal(composed.modelId, 'gpt-6.1-sol')
+})
+
+check('withSelection：有目录快照时优先目录结果，并补齐模型 id', () => {
+  const base = { color: '#111111', ink: '#ffffff', text: 'abcd', providerId: 'codex-relay', providerName: 'GPT Relay', modelId: '', modelName: '' }
+  const composed = bridge.withSelection(base, { provider: 'codex-relay', model: 'gpt-6.1-sol' }, undefined)
+  assert.equal(composed.color, '#111111')
+  assert.equal(composed.modelId, 'gpt-6.1-sol')
+  assert.equal(composed.modelName, 'gpt-6.1-sol')
+})
+
+check('withSelection：既无目录又无纯色表 → null（中性降级）', () => {
+  assert.equal(bridge.withSelection(null, { provider: 'codex-relay' }, undefined), null)
+  assert.equal(bridge.withSelection(null, null, (provider) => badge.__test.colorPresentationFor(provider, [])), null)
+})
+
 console.log('\n' + passed + ' checks passed' + (process.exitCode === 1 ? ', some FAILED' : ''))

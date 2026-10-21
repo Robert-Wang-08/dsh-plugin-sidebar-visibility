@@ -15,8 +15,10 @@ import React from 'react'
 import {
   BRIDGE_EVENT,
   readBridge,
+  withSelection,
   type PresentationHandle,
   type PresentationSnapshot,
+  type SessionSelection,
 } from './runtime-bridge.ts'
 import {
   elapsedOf,
@@ -101,6 +103,11 @@ export interface RunningIndicatorProps {
   sessionId: string
   /** 会话是否正在运行；false 时返回 null（调用方也可自行条件渲染）。 */
   running: boolean
+  /**
+   * 会话投影里的模型选择（provider/model）。目录未驻留（非当前会话）时，
+   * 这是上色的唯一来源 —— 共享目录只对已打开的会话可用。
+   */
+  selection?: SessionSelection | null
 }
 
 /**
@@ -108,8 +115,9 @@ export interface RunningIndicatorProps {
  * 总宽在窄侧栏内约 96px，超出省略；完整说明放 title/aria-label。
  */
 export function RunningIndicator(props: RunningIndicatorProps) {
-  const { sessionId, running } = props
-  const presentation = usePresentation(sessionId)
+  const { sessionId, running, selection } = props
+  const snapshot = usePresentation(sessionId)
+  const presentation = withSelection(snapshot, selection, readBridge()?.colorFor)
   const observation = useObservedRuntime(running)
   if (!running) return null
 

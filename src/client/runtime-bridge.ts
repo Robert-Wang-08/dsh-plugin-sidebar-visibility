@@ -43,6 +43,14 @@ export interface PresentationHandle {
 export interface BridgeShape {
   version?: number
   presentationFor?: (sessionId: string) => PresentationHandle | null
+  /** 纯色表查询：不需要会话驻留，给 providerId 即可取色（未入表的按集合铺槽）。 */
+  colorFor?: (providerId: string, providerIds?: readonly string[]) => PresentationSnapshot | null
+}
+
+/** 会话投影里的模型选择（SessionProjectionMap 的 modelSelection.next / lastUsed）。 */
+export interface SessionSelection {
+  provider?: string
+  model?: string
 }
 
 /** 读取 badge 桥；未装 badge、版本不符或读取抛错时返回 null（中性降级）。 */
@@ -52,4 +60,32 @@ export function readBridge(): BridgeShape | null {
   if (bridge === null || bridge === undefined || typeof bridge !== 'object') return null
   if (bridge.version !== BRIDGE_VERSION || typeof bridge.presentationFor !== 'function') return null
   return bridge
+}
+
+/**
+ * 合成展示快照：优先用共享目录快照（含模型显示名与用户自选色）；目录不可用
+ *（会话未驻留）时退回「会话投影里的 provider + badge 纯色表」，让列表里每个
+ * 运行中的会话都能上色，而不是只有当前打开的那个。两者都拿不到 → null。
+ */
+export function withSelection(
+  base: PresentationSnapshot | null,
+  selection: SessionSelection | null | undefined,
+  colorFor: BridgeShape['colorFor'] | undefined,
+): PresentationSnapshot | null {
+  const provider = selection?.provider
+  const model = selection?.model
+  if (base !== null) {
+    if (typeof model === 'string' && model !== '' && base.modelId !== model) {
+      return { ...base, modelId: model, modelName: model }
+    }
+    return base
+  }
+  if (typeof provider !== 'string' || provider === '' || colorFor === undefined) return null
+  const colored = colorFor(provider)
+  if (colored === null) return null
+  return {
+    ...colored,
+    modelId: typeof model === 'string' ? model : '',
+    modelName: typeof model === 'string' ? model : '',
+  }
 }

@@ -53,6 +53,7 @@ import {
   type TreeNode,
 } from './workspace-hierarchy.ts'
 import { RunningIndicator } from './runtime-indicator.tsx'
+import type { SessionSelection } from './runtime-bridge.ts'
 
 interface SessionSummaryLike {
   id: string
@@ -144,6 +145,17 @@ export function WorkspaceTree(props: WorkspaceTreeProps) {
   const orderBy: SessionOrderBy = prefs.orderBy
 
   const byId: Record<string, SessionSummaryLike> = useSessions?.((s) => s.byId) ?? {}
+  /**
+   * 会话投影里的模型选择：非当前会话拿不到 modelDirectories 目录，但仍能从
+   * 这里读到 provider/model，用于列表上色（badge 提供不依赖目录的纯色表查询）。
+   */
+  const projections: Record<string, { values?: { modelSelection?: { next?: SessionSelection | null; lastUsed?: SessionSelection | null } } }> =
+    useSessions?.((s) => s.projectionsBySession) ?? {}
+  const selectionOf = (id: string): SessionSelection | null => {
+    const projected = projections[id]?.values?.modelSelection
+    if (projected === null || projected === undefined) return null
+    return projected.next ?? projected.lastUsed ?? null
+  }
   const sessionIds: readonly string[] = useSessions?.((s) => s.ids) ?? []
   const current: string | undefined = useSessions?.((s) => s.current)
   const workspaces: readonly WorkspaceViewLike[] = useWorkspaces?.((s) => s.items) ?? []
@@ -459,7 +471,7 @@ export function WorkspaceTree(props: WorkspaceTreeProps) {
         'div',
         { style: { display: 'flex', alignItems: 'center', gap: 4 } },
         s.running === true
-          ? React.createElement(RunningIndicator, { sessionId: s.id, running: true })
+          ? React.createElement(RunningIndicator, { sessionId: s.id, running: true, selection: selectionOf(s.id) })
           : null,
         React.createElement(
           'span',
