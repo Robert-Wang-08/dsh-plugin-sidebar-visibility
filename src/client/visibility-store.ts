@@ -51,6 +51,13 @@ export interface VisibilityPrefs {
   /** 侧栏会话列表模式；默认使用本插件增强树。 */
   treeMode: TreeMode
   /**
+   * 隐藏 superagent 任务（worker 会话及其 `.dsh/state/superagent/work` 工作区）。
+   *
+   * 纯展示开关：只影响本插件的会话树派生视图，不归档、不改 Host 数据，
+   * 会话照常运行；关闭后立即恢复显示，无需重启宿主。默认显示（与官方一致）。
+   */
+  hideSuperagentTasks: boolean
+  /**
    * 「已完成但尚未查看」的会话（行尾亮点）。
    *
    * 语义：浏览器观察到 running true→false 时加入；用户打开该会话（current 切到
@@ -84,6 +91,7 @@ const DEFAULTS: VisibilityPrefs = {
   groupBy: 'workspace-tree',
   orderBy: 'updated',
   treeMode: 'plugin',
+  hideSuperagentTasks: false,
   unreadSessionIds: [],
 }
 
@@ -151,6 +159,17 @@ export function setTreeMode(mode: TreeMode) {
 /** 在插件树与官方树之间一键切换。 */
 export function toggleTreeMode() {
   setTreeMode(read().treeMode === 'plugin' ? 'official' : 'plugin')
+}
+
+/**
+ * 设置是否隐藏 superagent 任务（worker 会话 + work 工作区）。
+ *
+ * 只写本地偏好；树的重算是纯前端派生，切换立即生效，不重启宿主、不改 Host 数据。
+ */
+export function setHideSuperagentTasks(hide: boolean) {
+  const prefs = read()
+  prefs.hideSuperagentTasks = hide
+  write(prefs)
 }
 
 export function toggleHiddenWorkspace(workspaceId: string) {

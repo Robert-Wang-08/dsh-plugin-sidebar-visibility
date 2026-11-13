@@ -37,6 +37,7 @@ import {
   setGroupBy,
   setOrderBy,
   setCollapsedWorkspaces,
+  setHideSuperagentTasks,
   subscribeVisibility,
   toggleCollapsedWorkspace,
   toggleFavoriteSession,
@@ -57,6 +58,7 @@ import {
 } from './workspace-hierarchy.ts'
 import { RunningIndicator } from './runtime-indicator.tsx'
 import type { SessionSelection } from './runtime-bridge.ts'
+import { isSuperagentTaskSession, isSuperagentWorkPath } from './superagent-filter.ts'
 
 interface SessionSummaryLike {
   id: string
@@ -146,6 +148,11 @@ export function WorkspaceTree(props: WorkspaceTreeProps) {
   const collapsed = new Set(prefs.collapsedWorkspaceIds)
   const groupBy: SessionGroupBy = prefs.groupBy
   const orderBy: SessionOrderBy = prefs.orderBy
+  /**
+   * 隐藏 superagent 任务：worker 会话与其 `.dsh/state/superagent/work` 工作区
+   * 从派生视图里剔除（开关只写本地偏好，不改 Host 数据，可随时恢复）。
+   */
+  const hideTasks = prefs.hideSuperagentTasks
 
   const byId: Record<string, SessionSummaryLike> = useSessions?.((s) => s.byId) ?? {}
   /**
@@ -165,6 +172,10 @@ export function WorkspaceTree(props: WorkspaceTreeProps) {
   const workspaces: readonly WorkspaceViewLike[] = useWorkspaces?.((s) => s.items) ?? []
   const archived: readonly string[] = useWorkspaces?.((s) => s.archivedSessionIds) ?? []
   const archivedSet = new Set(archived)
+  /** 开关打开时，superagent 的 work 工作区整体退出分组 / 目录树 / 平铺列表。 */
+  const visibleWorkspaces: readonly WorkspaceViewLike[] = hideTasks
+    ? workspaces.filter((w) => !isSuperagentWorkPath(w.path))
+    : workspaces
 
   // ---- 已完成未读 -----------------------------------------------------------
   /*
@@ -206,7 +217,7 @@ export function WorkspaceTree(props: WorkspaceTreeProps) {
    * 最近严格祖先（./workspace-hierarchy.ts），拖拽的兼容判定与同级锚点也用它。
    * promotedParents 把隐藏工作区的子区提升到最近可见祖先，避免数据失踪。
    */
-  const treeHierarchy = groupBy === 'workspace-tree' ? buildWorkspaceHierarchy(workspaces) : null
+  const treeHierarchy = groupBy === 'workspace-tree' ? buildWorkspaceHierarchy(visibleWorkspaces) : null
   const promotedParents = treeHierarchy === null ? null : promotePastHidden(treeHierarchy.parents, hidden)
   /*
    * 当前会话所在工作区及其祖先链（workspace-tree 模式）：直接所在组与祖先组
@@ -215,7 +226,7 @@ export function WorkspaceTree(props: WorkspaceTreeProps) {
   const currentGroupKey =
     treeHierarchy === null || current === undefined
       ? undefined
-      : workspaces.find((w) => (w.sessionIds ?? []).includes(current))?.workspaceId
+      : visibleWorkspaces.find((w) => (w.sessionIds ?? []).includes(current))?.workspaceId
   const currentAncestors =
     treeHierarchy === null ? new Set<string>() : ancestorKeys(treeHierarchy.parents, currentGroupKey)
 
@@ -224,9 +235,10 @@ export function WorkspaceTree(props: WorkspaceTreeProps) {
     (id: string): SessionSummaryLike | null => {
       const s = byId[id]
       if (!s || archivedSet.has(id) || s.origin === 'subagent') return null
+      if (hideTasks && isSuperagentTaskSession(s)) return null
       return s
     },
-    [byId, archivedSet],
+    [byId, archivedSet, hideTasks],
   )
 
   /**
@@ -305,7 +317,7 @@ export function WorkspaceTree(props: WorkspaceTreeProps) {
    * （会话数 × 工作区数 的重复开销）。
    */
   const workspaceLabelBySession = new Map<string, string>()
-  for (const w of workspaces) {
+  for (const w of visibleWorkspaces) {
     const label = w.title || w.path || w.workspaceId
     for (const id of w.sessionIds ?? []) if (!workspaceLabelBySession.has(id)) workspaceLabelBySession.set(id, label)
   }
@@ -328,7 +340,7 @@ export function WorkspaceTree(props: WorkspaceTreeProps) {
   // ---- 分组模式 -----------------------------------------------------------
 
   const buildGroups = (): Group[] => {
-    const groups: Group[] = workspaces.map((w) => ({
+    const groups: Group[] = visibleWorkspaces.map((w) => ({
       workspace: w,
       key: w.workspaceId,
       title: w.title || w.path || w.workspaceId,
@@ -348,9 +360,9 @@ export function WorkspaceTree(props: WorkspaceTreeProps) {
 
   /** 平铺模式：所有可见会话合并为一个列表，按当前排序档位排列。 */
   const buildFlat = (): SessionSummaryLike[] => {
-    const groupedIds = new Set(workspaces.flatMap((w) => w.sessionIds ?? []))
+    const groupedIds = new Set(visibleWorkspaces.flatMap((w) => w.sessionIds ?? []))
     const head = sessionIds.filter((id) => !groupedIds.has(id))
-    const tail = workspaces.flatMap((w) => (w.sessionIds ?? []).slice())
+    const tail = visibleWorkspaces.flatMap((w) => (w.sessionIds ?? []).slice())
     const seen = new Set<string>()
     const rows: SessionSummaryLike[] = []
     for (const id of [...head, ...tail]) {
@@ -1202,6 +1214,23 @@ export function WorkspaceTree(props: WorkspaceTreeProps) {
           onChange: (e: React.ChangeEvent<HTMLInputElement>) => setFavoritesOnly(e.target.checked),
         }),
         '仅收藏',
+      ),
+      /*
+       * superagent 任务过滤：worker-* 会话与 .dsh/state/superagent/work 工作区
+       * 一起退出列表。纯前端派生开关，持久化在同一个 localStorage 键；关闭即恢复。
+       */
+      React.createElement(
+        'label',
+        {
+          style: { display: 'flex', gap: 4, alignItems: 'center', cursor: 'pointer', fontSize: 11 },
+          title: '隐藏 superagent 任务：worker-* 会话及其 .dsh/state/superagent/work 工作区（仅显示过滤，不影响运行）',
+        },
+        React.createElement('input', {
+          type: 'checkbox',
+          checked: hideTasks,
+          onChange: (e: React.ChangeEvent<HTMLInputElement>) => setHideSuperagentTasks(e.target.checked),
+        }),
+        '隐藏任务',
       ),
       // 全折叠 / 全展开：只在分组模式下出现（平铺模式没有可折叠的分组）。
       collapsibleKeys.length > 0
