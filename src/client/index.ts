@@ -24,6 +24,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { ProviderSuspendToggle } from './ProviderSuspendToggle.tsx'
 import { TreeModeToggle } from './TreeModeToggle.tsx'
 import { WorkspaceTree } from './WorkspaceTree.tsx'
+import { WorkspacePicker } from './WorkspacePicker.tsx'
 import { getVisibility, subscribeVisibility, toggleTreeMode } from './visibility-store.ts'
 
 /**
@@ -75,6 +76,8 @@ interface WorkspacesFace {
    * 官方 browserInjected() 的 insertWorkspaceBefore 走同一条路径。
    */
   insertBefore(workspaceId: string, beforeWorkspaceId?: string): Promise<void>
+  /** 注册工作区（官方 picker 的 `createWorkspace({ path })` 同一条 RPC）。 */
+  create(input: { path: string }): Promise<{ workspaceId: string }>
 }
 
 interface VisibilityClientContext extends Context {
@@ -198,4 +201,33 @@ export function apply(ctx: Context) {
       ),
     )
   }
+
+  /*
+   * 新建会话的「选择工作区」席位：官方 client-ui-workspace 以默认 priority 0
+   * 占用；本项目只在「隐藏任务」打开时接管（priority -1），关闭时卸载、官方
+   * 选择器立即接管 —— 过滤是可选增强，不改变默认观感。
+   */
+  let disposePicker: (() => void) | undefined
+  const syncPicker = () => {
+    if (!getVisibility().hideSuperagentTasks) {
+      disposePicker?.()
+      disposePicker = undefined
+      return
+    }
+    if (disposePicker !== undefined) return
+    disposePicker = client.slots.inject('conversation.hero.workspace', () =>
+      client.slots.register(
+        {
+          name: 'conversation.hero.workspace',
+          priority: SHADOW_OFFICIAL_PRIORITY,
+          inject: () => ({
+            createWorkspace: (input: { path: string }) => workspaces?.create(input),
+          }),
+        },
+        WorkspacePicker,
+      ),
+    )
+  }
+  syncPicker()
+  ctx.effect(() => subscribeVisibility(syncPicker), 'sidebar-visibility: workspace picker filter')
 }

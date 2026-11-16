@@ -39,6 +39,7 @@ const reactStub = {
 }
 const fakeRequire = (spec) => {
   if (spec === 'react') return reactStub
+  if (spec === 'react-dom') return { createPortal: (node) => node }
   throw new Error('unexpected require from client bundle: ' + spec)
 }
 

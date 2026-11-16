@@ -1,3 +1,5 @@
+import { getVisibility } from './visibility-store.ts'
+
 /**
  * superagent 任务会话 / 工作区判定。
  *
@@ -37,4 +39,17 @@ export function isWorkerSessionId(id: string): boolean {
  */
 export function isSuperagentTaskSession(session: { id: string; cwd?: string }): boolean {
   return isWorkerSessionId(session.id) || isSuperagentWorkPath(session.cwd)
+}
+
+/**
+ * 工作区选择器（新建会话顶部）的可选项过滤：`hide` 打开时剔除 superagent
+ * 任务工作区；其余顺序、标题、选择态都不变。纯函数，便于单测。
+ */
+export function filterPickerWorkspaces<T extends { path?: string }>(items: readonly T[], hide: boolean): T[] {
+  return hide ? items.filter((item) => !isSuperagentWorkPath(item.path)) : [...items]
+}
+
+/** 当前「隐藏任务」开关值（读取插件持久化偏好）。 */
+export function getHideSuperagentTasks(): boolean {
+  return getVisibility().hideSuperagentTasks
 }
